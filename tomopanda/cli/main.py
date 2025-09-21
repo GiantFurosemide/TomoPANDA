@@ -14,6 +14,7 @@ from .commands.visualize import VisualizeCommand
 from .commands.analyze import AnalyzeCommand
 from .commands.config import ConfigCommand
 from .commands.version import VersionCommand
+from .commands.sample import SampleCommand
 
 
 class TomoPandaCLI:
@@ -27,6 +28,7 @@ class TomoPandaCLI:
             'analyze': AnalyzeCommand(),
             'config': ConfigCommand(),
             'version': VersionCommand(),
+            'sample': SampleCommand(),
         }
     
     def create_parser(self) -> argparse.ArgumentParser:

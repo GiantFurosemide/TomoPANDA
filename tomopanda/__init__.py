@@ -9,4 +9,5 @@ __email__ = "contact@tomopanda.org"
 
 from .cli import main
 
+# Only export main CLI entry point
 __all__ = ["main"]

@@ -28,7 +28,8 @@ tomopanda/
 │       ├── visualize.py     # 可视化命令
 │       ├── analyze.py       # 数据分析命令
 │       ├── config.py        # 配置管理命令
-│       └── version.py       # 版本信息命令
+│       ├── version.py       # 版本信息命令
+│       └── sample.py        # 粒子采样命令
 └── config/
     ├── manager.py           # 配置管理器
     └── defaults.py          # 默认配置
@@ -76,7 +77,34 @@ tomopanda config <action> [options]
 - **子命令**: `init`, `show`, `validate`
 - **输出**: 配置文件
 
-### 6. 版本信息 (`version`)
+### 6. 粒子采样 (`sample`)
+```bash
+tomopanda sample <method> [options]
+```
+- **功能**: 从断层扫描数据中采样粒子候选
+- **子命令**: `mesh-geodesic` - 基于网格测地距离的膜蛋白采样
+- **参数**: 膜掩码、采样参数、输出格式等
+- **输出**: 采样坐标、RELION格式文件
+
+#### 6.1 Mesh Geodesic采样
+```bash
+# 使用合成数据测试
+tomopanda sample mesh-geodesic --create-synthetic --output results/
+
+# 使用真实膜掩码
+tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
+
+# 自定义参数
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --min-distance 25.0 \
+    --particle-radius 12.0 \
+    --smoothing-sigma 2.0 \
+    --verbose
+```
+
+### 7. 版本信息 (`version`)
 ```bash
 tomopanda version [options]
 ```

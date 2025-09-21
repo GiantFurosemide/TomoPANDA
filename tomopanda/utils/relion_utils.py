@@ -1,0 +1,323 @@
+"""
+RELION Format Utilities for TomoPANDA
+
+This module provides utilities for converting mesh geodesic sampling results
+to RELION format for particle picking and 3D classification.
+
+Author: TomoPANDA Team
+"""
+
+import numpy as np
+import pandas as pd
+from typing import Tuple, Optional, Union, List
+from pathlib import Path
+import math
+
+
+class RELIONConverter:
+    """
+    Utility class for converting coordinates and orientations to RELION format.
+    """
+    
+    @staticmethod
+    def normal_to_euler(normal: np.ndarray) -> Tuple[float, float, float]:
+        """
+        Convert surface normal to Euler angles (tilt, psi, rot).
+        
+        Args:
+            normal: Surface normal vector (3,)
+            
+        Returns:
+            Tuple of (tilt, psi, rot) in degrees
+        """
+        nx, ny, nz = normal
+        
+        # Calculate tilt (angle from z-axis)
+        tilt = math.degrees(math.acos(np.clip(nz, -1.0, 1.0)))
+        
+        # Calculate psi (rotation around z-axis)
+        psi = math.degrees(math.atan2(ny, nx))
+        
+        # rot is typically 0 for membrane proteins
+        rot = 0.0
+        
+        return tilt, psi, rot
+    
+    @staticmethod
+    def euler_to_rotation_matrix(tilt: float, psi: float, rot: float) -> np.ndarray:
+        """
+        Convert Euler angles to rotation matrix.
+        
+        Args:
+            tilt: Tilt angle in degrees
+            psi: Psi angle in degrees
+            rot: Rot angle in degrees
+            
+        Returns:
+            3x3 rotation matrix
+        """
+        # Convert to radians
+        tilt_rad = math.radians(tilt)
+        psi_rad = math.radians(psi)
+        rot_rad = math.radians(rot)
+        
+        # Rotation matrices
+        Rz_psi = np.array([
+            [math.cos(psi_rad), -math.sin(psi_rad), 0],
+            [math.sin(psi_rad), math.cos(psi_rad), 0],
+            [0, 0, 1]
+        ])
+        
+        Ry_tilt = np.array([
+            [math.cos(tilt_rad), 0, math.sin(tilt_rad)],
+            [0, 1, 0],
+            [-math.sin(tilt_rad), 0, math.cos(tilt_rad)]
+        ])
+        
+        Rz_rot = np.array([
+            [math.cos(rot_rad), -math.sin(rot_rad), 0],
+            [math.sin(rot_rad), math.cos(rot_rad), 0],
+            [0, 0, 1]
+        ])
+        
+        # Combined rotation: R = Rz(rot) * Ry(tilt) * Rz(psi)
+        R = Rz_rot @ Ry_tilt @ Rz_psi
+        
+        return R
+    
+    @staticmethod
+    def create_star_file(centers: np.ndarray, 
+                        normals: np.ndarray,
+                        output_path: Union[str, Path],
+                        tomogram_name: str = "tomogram",
+                        particle_diameter: float = 200.0,
+                        confidence: float = 0.5) -> None:
+        """
+        Create RELION STAR file for particle coordinates.
+        
+        Args:
+            centers: Sample centers (K, 3)
+            normals: Sample normals (K, 3)
+            output_path: Output STAR file path
+            tomogram_name: Name of the tomogram
+            particle_diameter: Particle diameter in Angstroms
+            confidence: Confidence score for particles
+        """
+        if len(centers) == 0:
+            raise ValueError("No coordinates to save")
+        
+        # Convert normals to Euler angles
+        euler_angles = []
+        for normal in normals:
+            tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
+            euler_angles.append([tilt, psi, rot])
+        
+        euler_angles = np.array(euler_angles)
+        
+        # Create STAR file data
+        data = {
+            'rlnCoordinateX': centers[:, 0],
+            'rlnCoordinateY': centers[:, 1], 
+            'rlnCoordinateZ': centers[:, 2],
+            'rlnAngleTilt': euler_angles[:, 0],
+            'rlnAnglePsi': euler_angles[:, 1],
+            'rlnAngleRot': euler_angles[:, 2],
+            'rlnTomoName': [tomogram_name] * len(centers),
+            'rlnTomoParticleId': range(len(centers)),
+            'rlnClassNumber': [1] * len(centers),
+            'rlnAutopickFigureOfMerit': [confidence] * len(centers),
+            'rlnCtfMaxResolution': [4.0] * len(centers),
+            'rlnCtfFigureOfMerit': [0.8] * len(centers),
+            'rlnCtfBfactor': [0.0] * len(centers),
+            'rlnCtfScalefactor': [1.0] * len(centers),
+            'rlnDefocusU': [0.0] * len(centers),
+            'rlnDefocusV': [0.0] * len(centers),
+            'rlnDefocusAngle': [0.0] * len(centers),
+            'rlnPhaseShift': [0.0] * len(centers),
+            'rlnCtfValue': [0.0] * len(centers),
+            'rlnGroupNumber': [1] * len(centers),
+            'rlnOriginX': [0.0] * len(centers),
+            'rlnOriginY': [0.0] * len(centers),
+            'rlnOriginZ': [0.0] * len(centers),
+            'rlnRandomSubset': [1] * len(centers),
+            'rlnParticleSelectZScore': [0.0] * len(centers),
+            'rlnHelicalTubeID': [0] * len(centers),
+            'rlnHelicalTrackLength': [0.0] * len(centers),
+            'rlnAngleTiltPrior': euler_angles[:, 0],
+            'rlnAnglePsiPrior': euler_angles[:, 1],
+            'rlnAngleRotPrior': euler_angles[:, 2],
+            'rlnTomoParticleDiameter': [particle_diameter] * len(centers)
+        }
+        
+        # Create DataFrame
+        df = pd.DataFrame(data)
+        
+        # Write STAR file
+        output_path = Path(output_path)
+        with open(output_path, 'w') as f:
+            # Write header
+            f.write("data_\n\n")
+            f.write("loop_\n")
+            
+            # Write column labels
+            for col in df.columns:
+                f.write(f"_{col}\n")
+            
+            # Write data
+            for _, row in df.iterrows():
+                f.write(" ".join([f"{val:.6f}" if isinstance(val, float) else str(val) 
+                                for val in row.values]) + "\n")
+        
+        print(f"Saved {len(centers)} particles to RELION STAR file: {output_path}")
+    
+    @staticmethod
+    def create_coordinate_file(centers: np.ndarray,
+                             normals: np.ndarray,
+                             output_path: Union[str, Path],
+                             voxel_size: Optional[Tuple[float, float, float]] = None) -> None:
+        """
+        Create simple coordinate file with positions and orientations.
+        
+        Args:
+            centers: Sample centers (K, 3)
+            normals: Sample normals (K, 3)
+            output_path: Output file path
+            voxel_size: Voxel size for coordinate scaling
+        """
+        if len(centers) == 0:
+            raise ValueError("No coordinates to save")
+        
+        # Scale coordinates if voxel size is provided
+        if voxel_size is not None:
+            centers_scaled = centers * np.array(voxel_size)
+        else:
+            centers_scaled = centers
+        
+        # Convert normals to Euler angles
+        euler_angles = []
+        for normal in normals:
+            tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
+            euler_angles.append([tilt, psi, rot])
+        
+        euler_angles = np.array(euler_angles)
+        
+        # Create data array
+        data = np.column_stack([
+            centers_scaled,  # x, y, z coordinates
+            euler_angles     # tilt, psi, rot angles
+        ])
+        
+        # Save as CSV
+        columns = ['x', 'y', 'z', 'tilt', 'psi', 'rot']
+        df = pd.DataFrame(data, columns=columns)
+        df.to_csv(output_path, index=False)
+        
+        print(f"Saved {len(centers)} coordinates to {output_path}")
+    
+    @staticmethod
+    def create_prior_angles_file(centers: np.ndarray,
+                               normals: np.ndarray,
+                               output_path: Union[str, Path],
+                               sigma_tilt: float = 30.0,
+                               sigma_psi: float = 30.0,
+                               sigma_rot: float = 30.0) -> None:
+        """
+        Create RELION prior angles file for 3D classification.
+        
+        Args:
+            centers: Sample centers (K, 3)
+            normals: Sample normals (K, 3)
+            output_path: Output file path
+            sigma_tilt: Standard deviation for tilt angle prior
+            sigma_psi: Standard deviation for psi angle prior
+            sigma_rot: Standard deviation for rot angle prior
+        """
+        if len(centers) == 0:
+            raise ValueError("No coordinates to save")
+        
+        # Convert normals to Euler angles
+        euler_angles = []
+        for normal in normals:
+            tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
+            euler_angles.append([tilt, psi, rot])
+        
+        euler_angles = np.array(euler_angles)
+        
+        # Create prior angles data
+        data = {
+            'rlnCoordinateX': centers[:, 0],
+            'rlnCoordinateY': centers[:, 1],
+            'rlnCoordinateZ': centers[:, 2],
+            'rlnAngleTiltPrior': euler_angles[:, 0],
+            'rlnAnglePsiPrior': euler_angles[:, 1],
+            'rlnAngleRotPrior': euler_angles[:, 2],
+            'rlnAngleTiltPriorSigma': [sigma_tilt] * len(centers),
+            'rlnAnglePsiPriorSigma': [sigma_psi] * len(centers),
+            'rlnAngleRotPriorSigma': [sigma_rot] * len(centers)
+        }
+        
+        # Create DataFrame and save
+        df = pd.DataFrame(data)
+        df.to_csv(output_path, index=False)
+        
+        print(f"Saved {len(centers)} prior angles to {output_path}")
+
+
+def convert_to_relion_star(centers: np.ndarray,
+                          normals: np.ndarray,
+                          output_path: Union[str, Path],
+                          tomogram_name: str = "tomogram",
+                          particle_diameter: float = 200.0) -> None:
+    """
+    Convenience function to convert coordinates to RELION STAR format.
+    
+    Args:
+        centers: Sample centers (K, 3)
+        normals: Sample normals (K, 3)
+        output_path: Output STAR file path
+        tomogram_name: Name of the tomogram
+        particle_diameter: Particle diameter in Angstroms
+    """
+    RELIONConverter.create_star_file(
+        centers, normals, output_path, tomogram_name, particle_diameter
+    )
+
+
+def convert_to_coordinate_file(centers: np.ndarray,
+                              normals: np.ndarray,
+                              output_path: Union[str, Path],
+                              voxel_size: Optional[Tuple[float, float, float]] = None) -> None:
+    """
+    Convenience function to create coordinate file.
+    
+    Args:
+        centers: Sample centers (K, 3)
+        normals: Sample normals (K, 3)
+        output_path: Output file path
+        voxel_size: Voxel size for coordinate scaling
+    """
+    RELIONConverter.create_coordinate_file(
+        centers, normals, output_path, voxel_size
+    )
+
+
+def convert_to_prior_angles(centers: np.ndarray,
+                           normals: np.ndarray,
+                           output_path: Union[str, Path],
+                           sigma_tilt: float = 30.0,
+                           sigma_psi: float = 30.0,
+                           sigma_rot: float = 30.0) -> None:
+    """
+    Convenience function to create prior angles file.
+    
+    Args:
+        centers: Sample centers (K, 3)
+        normals: Sample normals (K, 3)
+        output_path: Output file path
+        sigma_tilt: Standard deviation for tilt angle prior
+        sigma_psi: Standard deviation for psi angle prior
+        sigma_rot: Standard deviation for rot angle prior
+    """
+    RELIONConverter.create_prior_angles_file(
+        centers, normals, output_path, sigma_tilt, sigma_psi, sigma_rot
+    )

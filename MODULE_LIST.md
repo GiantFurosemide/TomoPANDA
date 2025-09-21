@@ -26,6 +26,7 @@
 - **pose_estimator**: 姿态估计器
 - **confidence_scorer**: 置信度评分器
 - **non_maximum_suppression**: 非极大值抑制
+- **mesh_geodesic**: 基于网格测地距离的膜蛋白采样算法
 
 ### 5. 后处理与优化模块 (Post-processing & Optimization)
 - **refinement**: 粒子位置精化
@@ -70,6 +71,8 @@
 - **data_exporters**: 数据导出器
 - **config_parser**: 配置文件解析
 - **log_manager**: 日志管理
+- **mrc_utils**: MRC文件读写工具
+- **relion_utils**: RELION格式转换工具
 
 ### 12. 工具与实用程序模块 (Utilities & Tools)
 - **memory_manager**: 内存管理

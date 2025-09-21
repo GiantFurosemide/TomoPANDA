@@ -9,6 +9,7 @@ from .visualize import VisualizeCommand
 from .analyze import AnalyzeCommand
 from .config import ConfigCommand
 from .version import VersionCommand
+from .sample import SampleCommand
 
 __all__ = [
     "BaseCommand",
@@ -17,5 +18,6 @@ __all__ = [
     "VisualizeCommand",
     "AnalyzeCommand",
     "ConfigCommand",
-    "VersionCommand"
+    "VersionCommand",
+    "SampleCommand"
 ]

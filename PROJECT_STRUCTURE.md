@@ -24,7 +24,8 @@ tomopanda/
 │   ├── se3_transformer.py     # SE(3)等变变换器
 │   ├── irreducible_representations.py  # 不可约表示
 │   ├── spherical_harmonics.py  # 球谐函数
-│   └── group_convolution.py   # 群卷积
+│   ├── group_convolution.py   # 群卷积
+│   └── mesh_geodesic.py       # 网格测地距离采样算法
 ├── data/                       # 数据处理模块
 │   ├── __init__.py
 │   ├── loader.py              # 数据加载器
@@ -36,7 +37,9 @@ tomopanda/
 │   ├── math_utils.py          # 数学工具
 │   ├── geometry_utils.py      # 几何工具
 │   ├── visualization.py       # 可视化工具
-│   └── memory_manager.py      # 内存管理
+│   ├── memory_manager.py      # 内存管理
+│   ├── mrc_utils.py           # MRC文件读写工具
+│   └── relion_utils.py        # RELION格式转换工具
 ├── config/                     # 配置管理
 │   ├── __init__.py
 │   ├── manager.py             # 配置管理器

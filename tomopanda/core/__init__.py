@@ -4,11 +4,13 @@ TomoPANDA核心模块
 """
 
 from .se3_transformer import SE3Transformer
-from .particle_detector import ParticleDetector
-from .membrane_detector import MembraneDetector
+from .group_convolution import GroupConvolution
+from .irreducible_representations import IrreducibleRepresentations
+from .spherical_harmonics import SphericalHarmonics
 
 __all__ = [
     "SE3Transformer",
-    "ParticleDetector", 
-    "MembraneDetector"
+    "GroupConvolution",
+    "IrreducibleRepresentations", 
+    "SphericalHarmonics"
 ]
