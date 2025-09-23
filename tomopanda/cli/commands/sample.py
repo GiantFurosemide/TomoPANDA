@@ -20,41 +20,59 @@ class SampleCommand(BaseCommand):
     """
     Sample command for particle picking operations.
     """
-    
-    def __init__(self):
-        super().__init__()
-        self.parser = argparse.ArgumentParser(
-            description="Sample particles from tomograms",
+
+    def get_name(self) -> str:
+        return "sample"
+
+    def get_description(self) -> str:
+        return "Sampling utilities (e.g., mesh-geodesic) for particle picking"
+
+    def add_parser(self, subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+        """Add the 'sample' command and its subcommands to the CLI."""
+        parser = subparsers.add_parser(
+            self.name,
+            help=self.description,
+            description="Sampling utilities for particle picking",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Examples:
   # Mesh geodesic sampling with synthetic data
   tomopanda sample mesh-geodesic --create-synthetic --output results/
-  
+
   # Mesh geodesic sampling with real membrane mask
   tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
-  
+
   # Custom parameters
   tomopanda sample mesh-geodesic --mask mask.mrc --min-distance 25.0 --particle-radius 12.0
             """
         )
-        
-        # Add subcommands
-        subparsers = self.parser.add_subparsers(
+
+        # Add subcommands for sampling methods
+        method_subparsers = parser.add_subparsers(
             dest='method',
             help='Sampling method to use',
             required=True
         )
-        
+
         # Mesh geodesic subcommand
-        mesh_parser = subparsers.add_parser(
+        mesh_parser = method_subparsers.add_parser(
             'mesh-geodesic',
             help='Mesh geodesic sampling for membrane-based particle picking',
             description='Perform mesh geodesic sampling on membrane masks to generate particle picking candidates'
         )
-        
+
         self._setup_mesh_geodesic_parser(mesh_parser)
-    
+
+        # Do not add common args here to avoid conflicts with existing --output/--verbose
+        return parser
+
+    def execute(self, args: argparse.Namespace) -> int:
+        """Execute the selected sampling method."""
+        if getattr(args, 'method', None) == 'mesh-geodesic':
+            return self._run_mesh_geodesic(args)
+        print(f"Unknown sampling method: {getattr(args, 'method', None)}")
+        return 1
+
     def _setup_mesh_geodesic_parser(self, parser: argparse.ArgumentParser):
         """Setup arguments for mesh geodesic sampling."""
         
@@ -187,15 +205,6 @@ Examples:
             action='store_true',
             help='Enable verbose output'
         )
-    
-    def run(self, args: argparse.Namespace) -> int:
-        """Run the sample command."""
-        
-        if args.method == 'mesh-geodesic':
-            return self._run_mesh_geodesic(args)
-        else:
-            self.parser.error(f"Unknown sampling method: {args.method}")
-            return 1
     
     def _run_mesh_geodesic(self, args: argparse.Namespace) -> int:
         """Run mesh geodesic sampling."""

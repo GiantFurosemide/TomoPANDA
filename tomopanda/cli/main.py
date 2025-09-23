@@ -43,7 +43,7 @@ class TomoPandaCLI:
         # 添加子命令
         subparsers = parser.add_subparsers(
             dest='command', # 告诉主解析器：子命令存储在 'command' 属性中
-            help='可用命令',
+            help='commands',
             metavar='<command>'
         )
         

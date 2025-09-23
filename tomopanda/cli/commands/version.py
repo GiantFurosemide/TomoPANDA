@@ -32,11 +32,6 @@ class VersionCommand(BaseCommand):
             action='store_true',
             help='只显示版本号'
         )
-        parser.add_argument(
-            '--verbose', '-v',
-            action='store_true',
-            help='显示详细信息'
-        )
         
         # 添加通用参数
         self.add_common_args(parser)
