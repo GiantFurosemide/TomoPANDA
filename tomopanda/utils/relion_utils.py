@@ -9,7 +9,7 @@ Author: TomoPANDA Team
 
 import numpy as np
 import pandas as pd
-from typing import Tuple, Optional, Union, List
+from typing import Tuple, Optional, Union, List, Dict
 from pathlib import Path
 import math
 
@@ -84,6 +84,31 @@ class RELIONConverter:
         R = Rz_rot @ Ry_tilt @ Rz_psi
         
         return R
+
+    @staticmethod
+    def rotation_matrix_to_direction(tilt: float, psi: float, rot: float, axis: str = 'z') -> np.ndarray:
+        """
+        Convert Euler angles to a unit direction vector by rotating a basis axis.
+
+        Args:
+            tilt: Tilt angle in degrees
+            psi: Psi angle in degrees
+            rot: Rot angle in degrees
+            axis: One of 'x', 'y', 'z' indicating which basis axis to rotate
+
+        Returns:
+            Unit 3D direction vector (3,)
+        """
+        R = RELIONConverter.euler_to_rotation_matrix(tilt, psi, rot)
+        if axis == 'x':
+            v = np.array([1.0, 0.0, 0.0], dtype=float)
+        elif axis == 'y':
+            v = np.array([0.0, 1.0, 0.0], dtype=float)
+        else:
+            v = np.array([0.0, 0.0, 1.0], dtype=float)
+        d = R @ v
+        n = np.linalg.norm(d)
+        return d / (n if n > 0 else 1.0)
     
     @staticmethod
     def create_star_file(centers: np.ndarray, 
@@ -321,3 +346,96 @@ def convert_to_prior_angles(centers: np.ndarray,
     RELIONConverter.create_prior_angles_file(
         centers, normals, output_path, sigma_tilt, sigma_psi, sigma_rot
     )
+
+
+def read_star(filepath: Union[str, Path]) -> pd.DataFrame:
+    """
+    Read a RELION .star file into a pandas DataFrame.
+
+    Notes:
+        - Supports simple 'data_ ... loop_' blocks with one table.
+        - Lines starting with '#' or empty are ignored.
+        - Column labels are expected as '_rln...' per RELION convention.
+
+    Returns:
+        DataFrame with columns stripped of leading underscore.
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        raise FileNotFoundError(f"STAR file not found: {filepath}")
+
+    columns: List[str] = []
+    rows: List[List[str]] = []
+    in_loop = False
+
+    with open(filepath, 'r') as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line.lower().startswith('data_'):
+                # start of a data block; continue
+                continue
+            if line.lower().startswith('loop_'):
+                in_loop = True
+                columns = []
+                rows = []
+                continue
+            if in_loop and line.startswith('_'):
+                # column label
+                # keep original but drop leading underscore for DataFrame name
+                col = line[1:]
+                columns.append(col)
+                continue
+            if in_loop:
+                # data row (space-separated; RELION uses plain whitespace)
+                parts = line.split()
+                # allow rows shorter than columns by padding
+                if len(parts) < len(columns):
+                    parts += [''] * (len(columns) - len(parts))
+                rows.append(parts[:len(columns)])
+
+    if not columns:
+        raise ValueError(f"No columns found in STAR file: {filepath}")
+
+    df = pd.DataFrame(rows, columns=columns)
+
+    # Try converting numeric columns to numbers
+    for c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors='ignore')
+
+    return df
+
+
+def parse_particles_from_star(df: pd.DataFrame) -> Dict[str, np.ndarray]:
+    """
+    Extract particle coordinates and Euler angles from a DataFrame created by read_star.
+
+    Returns dict with keys:
+        - centers: (N,3) float array for rlnCoordinate{X,Y,Z}
+        - eulers: (N,3) float array for [rlnAngleTilt, rlnAnglePsi, rlnAngleRot]
+    """
+    required_cols = ['rlnCoordinateX', 'rlnCoordinateY', 'rlnCoordinateZ']
+    angle_cols = ['rlnAngleTilt', 'rlnAnglePsi', 'rlnAngleRot']
+
+    for c in required_cols:
+        if c not in df.columns:
+            raise KeyError(f"Missing column in STAR: {c}")
+
+    centers = np.stack([
+        df['rlnCoordinateX'].astype(float).to_numpy(),
+        df['rlnCoordinateY'].astype(float).to_numpy(),
+        df['rlnCoordinateZ'].astype(float).to_numpy(),
+    ], axis=1)
+
+    if all(col in df.columns for col in angle_cols):
+        eulers = np.stack([
+            df['rlnAngleTilt'].astype(float).to_numpy(),
+            df['rlnAnglePsi'].astype(float).to_numpy(),
+            df['rlnAngleRot'].astype(float).to_numpy(),
+        ], axis=1)
+    else:
+        # If angles missing, default to zeros
+        eulers = np.zeros((len(df), 3), dtype=float)
+
+    return {'centers': centers, 'eulers': eulers}
