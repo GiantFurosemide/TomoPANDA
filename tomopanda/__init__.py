@@ -9,5 +9,20 @@ __email__ = "contact@tomopanda.org"
 
 from .cli import main
 
-# Only export main CLI entry point
-__all__ = ["main"]
+# Re-export selected mesh geodesic helpers for convenience
+from .core.mesh_geodesic import (
+    create_mesh_geodesic_sampler,
+    generate_synthetic_mask,
+    run_mesh_geodesic_sampling,
+    save_sampling_outputs,
+    create_visualization_script,
+)
+
+__all__ = [
+    "main",
+    "create_mesh_geodesic_sampler",
+    "generate_synthetic_mask",
+    "run_mesh_geodesic_sampling",
+    "save_sampling_outputs",
+    "create_visualization_script",
+]
