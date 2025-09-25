@@ -201,6 +201,11 @@ Examples:
             help='Create visualization script for results'
         )
         parser.add_argument(
+            '--save-intermediates',
+            action='store_true',
+            help='Save intermediate MRC volumes: surface mask and rasterized mesh surface'
+        )
+        parser.add_argument(
             '--verbose',
             action='store_true',
             help='Enable verbose output'
@@ -274,6 +279,25 @@ Examples:
             
             print(f"Sampling completed successfully!")
             print(f"Number of sampling points: {len(centers)}")
+            if args.verbose:
+                print("Euler angles are derived from normals (tilt, psi, rot=0) per RELION convention.")
+
+            # Save intermediates if requested
+            if args.save_intermediates:
+                from tomopanda.core.mesh_geodesic import MeshGeodesicSampler
+                from tomopanda.utils.mrc_utils import MRCWriter
+                print("\n=== Saving Intermediate Volumes (surface & mesh) ===")
+                surface = MeshGeodesicSampler.extract_surface_voxels(mask)
+                surface_path = output_dir / "surface_mask.mrc"
+                MRCWriter.write_membrane_mask(surface, surface_path)
+                # Recompute SDF and mesh to rasterize surface mesh
+                phi = sampler.create_signed_distance_field(mask)
+                mesh = sampler.extract_mesh_from_sdf(phi)
+                mesh_vol = MeshGeodesicSampler.rasterize_mesh_to_volume(mesh, mask.shape)
+                mesh_path = output_dir / "mesh_surface.mrc"
+                MRCWriter.write_membrane_mask(mesh_vol, mesh_path)
+                print(f"  - Surface mask: {surface_path}")
+                print(f"  - Mesh surface: {mesh_path}")
             
             if len(centers) > 0:
                 if args.verbose:
@@ -345,84 +369,28 @@ Examples:
         return 0
     
     def _create_synthetic_mask(self, args: argparse.Namespace) -> np.ndarray:
-        """Create synthetic membrane mask for testing."""
-        shape = tuple(args.synthetic_shape)
-        center = tuple(args.synthetic_center)
-        radius = args.synthetic_radius
-        
-        z, y, x = np.ogrid[:shape[0], :shape[1], :shape[2]]
-        
-        # Create sphere
-        distance = np.sqrt((x - center[2])**2 + (y - center[1])**2 + (z - center[0])**2)
-        mask = (distance <= radius).astype(np.uint8)
-        
-        return mask
+        """Create synthetic membrane mask for testing (delegates to core utility)."""
+        from tomopanda.core.mesh_geodesic import generate_synthetic_mask
+        return generate_synthetic_mask(
+            shape=tuple(args.synthetic_shape),
+            center=tuple(args.synthetic_center),
+            radius=args.synthetic_radius,
+        )
     
     def _save_coordinates_csv(self, centers: np.ndarray, normals: np.ndarray, filepath: Path):
-        """Save coordinates as CSV file."""
-        import pandas as pd
-        
-        data = np.column_stack([centers, normals])
-        columns = ['x', 'y', 'z', 'nx', 'ny', 'nz']
-        
-        df = pd.DataFrame(data, columns=columns)
-        df.to_csv(filepath, index=False)
-        
-        print(f"Saved {len(centers)} sampling points to {filepath}")
+        """Deprecated local writer; use core.save_sampling_outputs instead."""
+        from tomopanda.core.mesh_geodesic import save_sampling_outputs
+        out_dir = filepath.parent
+        save_sampling_outputs(
+            out_dir,
+            centers,
+            normals,
+            tomogram_name='tomogram',
+            particle_diameter=200.0,
+            create_vis_script=False,
+        )
     
     def _create_visualization_script(self, script_path: Path, centers: np.ndarray, normals: np.ndarray):
-        """Create visualization script for results."""
-        script_content = f'''#!/usr/bin/env python3
-"""
-Visualization script for mesh geodesic sampling results.
-"""
-
-import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-
-# Load sampling results
-centers = np.array({centers.tolist()})
-normals = np.array({normals.tolist()})
-
-# Create 3D visualization
-fig = plt.figure(figsize=(12, 8))
-
-# Plot 1: 3D scatter plot of sampling points
-ax1 = fig.add_subplot(121, projection='3d')
-ax1.scatter(centers[:, 0], centers[:, 1], centers[:, 2], 
-           c=range(len(centers)), cmap='viridis', s=20)
-ax1.set_xlabel('X')
-ax1.set_ylabel('Y')
-ax1.set_zlabel('Z')
-ax1.set_title(f'{{len(centers)}} Sampling Points')
-
-# Plot 2: Normal vectors
-ax2 = fig.add_subplot(122, projection='3d')
-# Show subset of normals for clarity
-step = max(1, len(centers) // 50)
-for i in range(0, len(centers), step):
-    center = centers[i]
-    normal = normals[i] * 5  # Scale for visibility
-    ax2.quiver(center[0], center[1], center[2], 
-               normal[0], normal[1], normal[2], 
-               color='red', alpha=0.6, arrow_length_ratio=0.1)
-
-ax2.set_xlabel('X')
-ax2.set_ylabel('Y')
-ax2.set_zlabel('Z')
-ax2.set_title('Surface Normals')
-
-plt.tight_layout()
-plt.savefig('sampling_visualization.png', dpi=150, bbox_inches='tight')
-plt.show()
-
-print(f"Visualization saved as 'sampling_visualization.png'")
-print(f"Total sampling points: {{len(centers)}}")
-'''
-        
-        with open(script_path, 'w') as f:
-            f.write(script_content)
-        
-        # Make script executable
-        script_path.chmod(0o755)
+        """Delegate viz script creation to core helper."""
+        from tomopanda.core.mesh_geodesic import create_visualization_script
+        create_visualization_script(script_path, centers, normals)

@@ -9,11 +9,13 @@ Mesh geodesic sampling是TomoPANDA中用于cryoET膜蛋白粒子挑选的算法�
 ### 1. 安装依赖 (Install Dependencies)
 
 ```bash
-# 安装项目依赖（包含mesh geodesic依赖）
+# 安装项目依赖（包含mesh geodesic依赖；gdist 可选）
 pip install -r requirements.txt
 
-# 或手动安装mesh geodesic相关依赖
-pip install mrcfile open3d scikit-image pandas scipy numpy gdist
+# 手动安装核心依赖（gdist 可选，安装后速度更快）
+pip install mrcfile open3d scikit-image pandas scipy numpy
+# 可选：安装 gdist 获取更快的测地距离（未安装将使用 SciPy 图最短路回退）
+pip install gdist
 ```
 
 ### 2. 基本使用 (Basic Usage)
@@ -60,20 +62,31 @@ tomopanda sample mesh-geodesic \
 
 ```python
 # 直接使用Python API
-from tomopanda.core.mesh_geodesic import create_mesh_geodesic_sampler
+from tomopanda.core.mesh_geodesic import (
+    create_mesh_geodesic_sampler,
+    generate_synthetic_mask,
+    run_mesh_geodesic_sampling,
+    save_sampling_outputs,
+)
 from tomopanda.utils.mrc_utils import load_membrane_mask
 from tomopanda.utils.relion_utils import convert_to_relion_star
 
-# 创建采样器
+# 方式A：合成掩码 + 一键运行 + 批量保存
+mask = generate_synthetic_mask(shape=(100,100,100), center=(50,50,50), radius=30)
+centers, normals = run_mesh_geodesic_sampling(mask, min_distance=20.0, particle_radius=10.0)
+save_sampling_outputs(
+    output_dir="results",
+    centers=centers,
+    normals=normals,
+    tomogram_name="tomogram",
+    particle_diameter=200.0,
+    create_vis_script=True,
+)
+
+# 方式B：自定义流程
 sampler = create_mesh_geodesic_sampler(min_distance=20.0)
-
-# 加载膜掩码
 mask = load_membrane_mask("membrane_mask.mrc")
-
-# 执行采样
 centers, normals = sampler.sample_membrane_points(mask, particle_radius=10.0)
-
-# 保存为RELION格式
 convert_to_relion_star(centers, normals, "particles.star")
 ```
 
@@ -117,7 +130,7 @@ tomopanda/
 - **mrcfile**: MRC文件读写
 - **open3d**: 3D网格处理
 - **scikit-image**: Marching Cubes算法
-- **gdist**: 测地距离计算
+- **gdist (可选)**: 测地距离计算（如未安装，将使用 SciPy 基于图的Dijkstra回退）
 - **pandas**: 数据格式转换
 
 ## 性能优化 (Performance Tips)
@@ -135,12 +148,20 @@ tomopanda/
    pip install gdist
    ```
 
-2. **ImportError: No module named 'open3d'**
+2. **RuntimeError: numpy.dtype size changed / binary incompatibility**
+   - Cause: gdist/open3d wheels built against older NumPy.
+   - Fix:
+     ```bash
+     pip install "numpy<2.0"
+     pip install --force-reinstall gdist open3d
+     ```
+
+3. **ImportError: No module named 'open3d'**
    ```bash
    pip install open3d
    ```
 
-3. **内存不足**
+4. **内存不足**
    - 减小输入数据尺寸
    - 增加`min_distance`参数
 
