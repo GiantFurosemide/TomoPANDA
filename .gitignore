@@ -1,5 +1,8 @@
 tomopanda_venv
 .venv
+*.egg-info
+*.egg
+
 __pycache__
 *.pyc
 *.pyo
