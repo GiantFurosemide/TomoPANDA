@@ -24,21 +24,30 @@ class RELIONConverter:
         """
         Convert surface normal to Euler angles (tilt, psi, rot).
         
+        This method converts a surface normal vector to RELION ZYZ Euler angles
+        such that the z-axis (0,0,1) rotated by these angles points in the
+        direction of the normal vector.
+        
         Args:
-            normal: Surface normal vector (3,)
+            normal: Surface normal vector (3,) - should be normalized
             
         Returns:
             Tuple of (tilt, psi, rot) in degrees
         """
+        # Normalize the input vector
+        normal = normal / np.linalg.norm(normal)
         nx, ny, nz = normal
         
         # Calculate tilt (angle from z-axis)
+        # tilt = 0 when normal points along +z, tilt = 180 when along -z
         tilt = math.degrees(math.acos(np.clip(nz, -1.0, 1.0)))
         
-        # Calculate psi (rotation around z-axis)
+        # Calculate psi (rotation around z-axis in xy-plane)
+        # This determines the direction in the xy-plane
         psi = math.degrees(math.atan2(ny, nx))
         
-        # rot is typically 0 for membrane proteins
+        # For membrane normals, we typically don't need in-plane rotation
+        # The rot angle represents rotation around the normal itself
         rot = 0.0
         
         return tilt, psi, rot
@@ -46,11 +55,11 @@ class RELIONConverter:
     @staticmethod
     def euler_to_rotation_matrix(tilt: float, psi: float, rot: float) -> np.ndarray:
         """
-        Convert Euler angles to rotation matrix.
+        Convert Euler angles to rotation matrix using RELION ZYZ convention.
         
         Args:
             tilt: Tilt angle in degrees
-            psi: Psi angle in degrees
+            psi: Psi angle in degrees  
             rot: Rot angle in degrees
             
         Returns:
@@ -61,19 +70,24 @@ class RELIONConverter:
         psi_rad = math.radians(psi)
         rot_rad = math.radians(rot)
         
-        # Rotation matrices
+        # RELION ZYZ Euler angle convention
+        # R = Rz(rot) * Ry(tilt) * Rz(psi)
+        
+        # First rotation: psi around Z-axis
         Rz_psi = np.array([
             [math.cos(psi_rad), -math.sin(psi_rad), 0],
             [math.sin(psi_rad), math.cos(psi_rad), 0],
             [0, 0, 1]
         ])
         
+        # Second rotation: tilt around Y-axis
         Ry_tilt = np.array([
             [math.cos(tilt_rad), 0, math.sin(tilt_rad)],
             [0, 1, 0],
             [-math.sin(tilt_rad), 0, math.cos(tilt_rad)]
         ])
         
+        # Third rotation: rot around Z-axis
         Rz_rot = np.array([
             [math.cos(rot_rad), -math.sin(rot_rad), 0],
             [math.sin(rot_rad), math.cos(rot_rad), 0],
@@ -118,11 +132,13 @@ class RELIONConverter:
                         particle_diameter: float = 200.0,
                         confidence: float = 0.5) -> None:
         """
-        Create RELION STAR file for particle coordinates.
+        Create RELION STAR file for subtomogram particle coordinates.
+        
+        Uses RELION 5 subtomogram tags: rlnTomoSubtomogramRot, rlnTomoSubtomogramTilt, rlnTomoSubtomogramPsi
         
         Args:
             centers: Sample centers (K, 3)
-            normals: Sample normals (K, 3)
+            normals: Sample normals (K, 3) - membrane surface normals
             output_path: Output STAR file path
             tomogram_name: Name of the tomogram
             particle_diameter: Particle diameter in Angstroms
@@ -131,7 +147,7 @@ class RELIONConverter:
         if len(centers) == 0:
             raise ValueError("No coordinates to save")
         
-        # Convert normals to Euler angles
+        # Convert membrane normals to Euler angles for subtomogram orientation
         euler_angles = []
         for normal in normals:
             tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
@@ -139,11 +155,16 @@ class RELIONConverter:
         
         euler_angles = np.array(euler_angles)
         
-        # Create STAR file data
+        # Create STAR file data with RELION 5 subtomogram tags
         data = {
             'rlnCoordinateX': centers[:, 0],
             'rlnCoordinateY': centers[:, 1], 
             'rlnCoordinateZ': centers[:, 2],
+            # RELION 5 subtomogram rotation tags
+            'rlnTomoSubtomogramRot': euler_angles[:, 2],    # rot angle
+            'rlnTomoSubtomogramTilt': euler_angles[:, 0],   # tilt angle  
+            'rlnTomoSubtomogramPsi': euler_angles[:, 1],    # psi angle
+            # Legacy angle tags for compatibility
             'rlnAngleTilt': euler_angles[:, 0],
             'rlnAnglePsi': euler_angles[:, 1],
             'rlnAngleRot': euler_angles[:, 2],
@@ -168,6 +189,7 @@ class RELIONConverter:
             'rlnParticleSelectZScore': [0.0] * len(centers),
             'rlnHelicalTubeID': [0] * len(centers),
             'rlnHelicalTrackLength': [0.0] * len(centers),
+            # Prior angles for subtomogram averaging
             'rlnAngleTiltPrior': euler_angles[:, 0],
             'rlnAnglePsiPrior': euler_angles[:, 1],
             'rlnAngleRotPrior': euler_angles[:, 2],
@@ -410,25 +432,46 @@ def read_star(filepath: Union[str, Path]) -> pd.DataFrame:
 def parse_particles_from_star(df: pd.DataFrame) -> Dict[str, np.ndarray]:
     """
     Extract particle coordinates and Euler angles from a DataFrame created by read_star.
+    
+    Supports RELION 5 subtomogram format with proper coordinate and angle extraction.
 
     Returns dict with keys:
-        - centers: (N,3) float array for rlnCoordinate{X,Y,Z}
-        - eulers: (N,3) float array for [rlnAngleTilt, rlnAnglePsi, rlnAngleRot]
+        - centers: (N,3) float array for particle coordinates
+        - eulers: (N,3) float array for [tilt, psi, rot]
     """
-    required_cols = ['rlnCoordinateX', 'rlnCoordinateY', 'rlnCoordinateZ']
-    angle_cols = ['rlnAngleTilt', 'rlnAnglePsi', 'rlnAngleRot']
+    # Check for RELION 5 subtomogram coordinate columns
+    subtomogram_coord_cols = ['rlnCenteredCoordinateXAngst', 'rlnCenteredCoordinateYAngst', 'rlnCenteredCoordinateZAngst']
+    legacy_coord_cols = ['rlnCoordinateX', 'rlnCoordinateY', 'rlnCoordinateZ']
+    
+    # Check for RELION 5 subtomogram angle columns
+    subtomogram_angle_cols = ['rlnTomoSubtomogramTilt', 'rlnTomoSubtomogramPsi', 'rlnTomoSubtomogramRot']
+    legacy_angle_cols = ['rlnAngleTilt', 'rlnAnglePsi', 'rlnAngleRot']
 
-    for c in required_cols:
-        if c not in df.columns:
-            raise KeyError(f"Missing column in STAR: {c}")
+    # Extract coordinates - prefer subtomogram format
+    if all(col in df.columns for col in subtomogram_coord_cols):
+        centers = np.stack([
+            df['rlnCenteredCoordinateXAngst'].astype(float).to_numpy(),
+            df['rlnCenteredCoordinateYAngst'].astype(float).to_numpy(),
+            df['rlnCenteredCoordinateZAngst'].astype(float).to_numpy(),
+        ], axis=1)
+    elif all(col in df.columns for col in legacy_coord_cols):
+        centers = np.stack([
+            df['rlnCoordinateX'].astype(float).to_numpy(),
+            df['rlnCoordinateY'].astype(float).to_numpy(),
+            df['rlnCoordinateZ'].astype(float).to_numpy(),
+        ], axis=1)
+    else:
+        raise KeyError(f"Missing coordinate columns in STAR file. Available columns: {list(df.columns)}")
 
-    centers = np.stack([
-        df['rlnCoordinateX'].astype(float).to_numpy(),
-        df['rlnCoordinateY'].astype(float).to_numpy(),
-        df['rlnCoordinateZ'].astype(float).to_numpy(),
-    ], axis=1)
-
-    if all(col in df.columns for col in angle_cols):
+    # Extract angles - prefer subtomogram format
+    if all(col in df.columns for col in subtomogram_angle_cols):
+        eulers = np.stack([
+            df['rlnTomoSubtomogramTilt'].astype(float).to_numpy(),
+            df['rlnTomoSubtomogramPsi'].astype(float).to_numpy(),
+            df['rlnTomoSubtomogramRot'].astype(float).to_numpy(),
+        ], axis=1)
+    elif all(col in df.columns for col in legacy_angle_cols):
+        # Fall back to legacy angle tags
         eulers = np.stack([
             df['rlnAngleTilt'].astype(float).to_numpy(),
             df['rlnAnglePsi'].astype(float).to_numpy(),

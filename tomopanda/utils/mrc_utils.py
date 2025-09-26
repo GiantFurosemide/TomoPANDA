@@ -219,28 +219,168 @@ def save_coordinates(centers: np.ndarray,
                     filepath: Union[str, Path],
                     voxel_size: Optional[Tuple[float, float, float]] = None) -> None:
     """
-    Save sampling coordinates to MRC file.
+    Save sampling coordinates to CSV file for subtomogram processing.
     
     Args:
         centers: Sample centers (K, 3)
-        normals: Sample normals (K, 3)
+        normals: Sample normals (K, 3) - membrane surface normals
         filepath: Output file path
         voxel_size: Voxel size for coordinate scaling
     """
     if len(centers) == 0:
         raise ValueError("No coordinates to save")
     
-    # Create a 3D volume with markers at sample points
-    # This is a simple approach - in practice you might want to use
-    # a more sophisticated format like STAR files
+    # Scale coordinates if voxel size is provided
+    if voxel_size is not None:
+        centers_scaled = centers * np.array(voxel_size)
+    else:
+        centers_scaled = centers
     
-    # For now, save as CSV with coordinates and normals
+    # Save as CSV with coordinates and normals for subtomogram processing
     import pandas as pd
     
-    data = np.column_stack([centers, normals])
+    data = np.column_stack([centers_scaled, normals])
     columns = ['x', 'y', 'z', 'nx', 'ny', 'nz']
     
     df = pd.DataFrame(data, columns=columns)
     df.to_csv(filepath, index=False)
     
     print(f"Saved {len(centers)} sampling points to {filepath}")
+
+
+def save_subtomogram_coordinates(centers: np.ndarray, 
+                                normals: np.ndarray, 
+                                filepath: Union[str, Path],
+                                tomogram_name: str = "tomogram",
+                                particle_diameter: float = 200.0,
+                                voxel_size: Optional[Tuple[float, float, float]] = None) -> None:
+    """
+    Save sampling coordinates in RELION 5 subtomogram format.
+    
+    This function creates a STAR file compatible with RELION 5 subtomogram averaging,
+    using the rlnTomoSubtomogramRot/Tilt/Psi tags for membrane orientation.
+    
+    Args:
+        centers: Sample centers (K, 3)
+        normals: Sample normals (K, 3) - membrane surface normals
+        filepath: Output STAR file path
+        tomogram_name: Name of the tomogram
+        particle_diameter: Particle diameter in Angstroms
+        voxel_size: Voxel size for coordinate scaling
+    """
+    if len(centers) == 0:
+        raise ValueError("No coordinates to save")
+    
+    # Import here to avoid circular imports
+    from .relion_utils import RELIONConverter
+    
+    # Scale coordinates if voxel size is provided
+    if voxel_size is not None:
+        centers_scaled = centers * np.array(voxel_size)
+    else:
+        centers_scaled = centers
+    
+    # Convert membrane normals to Euler angles for subtomogram orientation
+    euler_angles = []
+    for normal in normals:
+        tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
+        euler_angles.append([tilt, psi, rot])
+    
+    euler_angles = np.array(euler_angles)
+    
+    # Create STAR file data with RELION 5 subtomogram format
+    import pandas as pd
+    
+    data = {
+        # Tomogram information
+        'rlnTomoName': [tomogram_name] * len(centers),
+        
+        # RELION 5 subtomogram rotation tags (primary)
+        'rlnTomoSubtomogramRot': euler_angles[:, 2],    # rot angle
+        'rlnTomoSubtomogramTilt': euler_angles[:, 0],   # tilt angle  
+        'rlnTomoSubtomogramPsi': euler_angles[:, 1],    # psi angle
+        
+        # Legacy angle tags for compatibility
+        'rlnAngleRot': euler_angles[:, 2],
+        'rlnAngleTilt': euler_angles[:, 0],
+        'rlnAnglePsi': euler_angles[:, 1],
+        
+        # Prior angles for subtomogram averaging
+        'rlnAngleTiltPrior': euler_angles[:, 0],
+        'rlnAnglePsiPrior': euler_angles[:, 1],
+        
+        # Optics group (required for RELION 5)
+        'rlnOpticsGroup': [1] * len(centers),
+        
+        # Particle names
+        'rlnTomoParticleName': [f"{tomogram_name}_{i:06d}" for i in range(len(centers))],
+        
+        # Visible frames (for subtomogram processing)
+        'rlnTomoVisibleFrames': [1] * len(centers),
+        
+        # Image names (placeholder for subtomogram files)
+        'rlnImageName': [f"{tomogram_name}_{i:06d}.mrc" for i in range(len(centers))],
+        
+        # Origin coordinates (in Angstroms)
+        'rlnOriginXAngst': [0.0] * len(centers),
+        'rlnOriginYAngst': [0.0] * len(centers),
+        'rlnOriginZAngst': [0.0] * len(centers),
+        
+        # Centered coordinates (in Angstroms) - these are the actual particle positions
+        'rlnCenteredCoordinateXAngst': centers_scaled[:, 0],
+        'rlnCenteredCoordinateYAngst': centers_scaled[:, 1], 
+        'rlnCenteredCoordinateZAngst': centers_scaled[:, 2],
+    }
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    # Write STAR file with proper RELION 5 subtomogram format
+    filepath = Path(filepath)
+    with open(filepath, 'w') as f:
+        # Write header matching the provided format
+        f.write("# version 50001\n\n")
+        f.write("data_particles\n\n")
+        f.write("loop_\n")
+        
+        # Write column labels in the exact order from the provided header
+        column_order = [
+            'rlnTomoName',
+            'rlnTomoSubtomogramRot', 
+            'rlnTomoSubtomogramTilt',
+            'rlnTomoSubtomogramPsi',
+            'rlnAngleRot',
+            'rlnAngleTilt',
+            'rlnAnglePsi',
+            'rlnAngleTiltPrior',
+            'rlnAnglePsiPrior',
+            'rlnOpticsGroup',
+            'rlnTomoParticleName',
+            'rlnTomoVisibleFrames',
+            'rlnImageName',
+            'rlnOriginXAngst',
+            'rlnOriginYAngst',
+            'rlnOriginZAngst',
+            'rlnCenteredCoordinateXAngst',
+            'rlnCenteredCoordinateYAngst',
+            'rlnCenteredCoordinateZAngst',
+        ]
+        
+        # Write column labels with numbers
+        for i, col in enumerate(column_order, 1):
+            if col in df.columns:
+                f.write(f"_{col} #{i}\n")
+        
+        # Write data rows
+        for _, row in df.iterrows():
+            values = []
+            for col in column_order:
+                if col in df.columns:
+                    val = row[col]
+                    if isinstance(val, float):
+                        values.append(f"{val:.6f}")
+                    else:
+                        values.append(str(val))
+            f.write(" ".join(values) + "\n")
+    
+    print(f"Saved {len(centers)} subtomogram particles to RELION 5 STAR file: {filepath}")
