@@ -57,6 +57,10 @@ tomopanda sample mesh-geodesic --create-synthetic --output results/
 
 # 使用真实膜掩码进行采样
 tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
+
+# 使用voxel表面采样并导出RELION 5 STAR
+tomopanda sample voxel-sample --create-synthetic --output voxel_results/
+tomopanda sample voxel-sample --mask membrane_mask.mrc --min-distance 20 --edge-distance 10 --output voxel_results/
 ```
 
 ### Python API使用
@@ -100,6 +104,20 @@ tomopanda sample mesh-geodesic \
     --min-distance 25.0 \
     --particle-radius 12.0 \
     --smoothing-sigma 2.0 \
+    --verbose
+
+# Voxel表面采样
+tomopanda sample voxel-sample [OPTIONS]
+
+# 使用合成数据测试
+tomopanda sample voxel-sample --create-synthetic --output voxel_results/
+
+# 使用真实膜掩码
+tomopanda sample voxel-sample \
+    --mask membrane_mask.mrc \
+    --output voxel_results/ \
+    --min-distance 25.0 \
+    --edge-distance 12.0 \
     --verbose
 ```
 
@@ -184,6 +202,12 @@ Mesh geodesic采样是一种基于网格测地距离的膜蛋白采样算法：
 - `--tomogram-name`: 断层扫描名称
 - `--particle-diameter`: 粒子直径（埃）
 - `--confidence`: 置信度分数
+
+### Voxel表面采样参数
+
+- `--min-distance`: 采样点间最小欧氏距离（像素）
+- `--edge-distance`: 与体素边界的最小距离（像素），避免半颗粒
+- `--voxel-size`: 体素尺寸 (X,Y,Z)（埃），用于将坐标缩放到物理单位
 
 ## 性能优化
 

@@ -23,6 +23,8 @@ Coordinate convention: inputs and outputs are in (X, Y, Z).
 """
 
 from typing import Tuple
+from typing import Optional, Union
+from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import binary_erosion
@@ -206,9 +208,126 @@ def sample(
     return field
 
 
+def extract_centers_and_normals_from_field(field: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extract sampling centers and normals from a dense field produced by sample().
+
+    Args:
+        field: ndarray (6, X, Y, Z) storing (x, y, z, vx, vy, vz) at selected voxels
+
+    Returns:
+        centers: ndarray (K, 3) with xyz coordinates
+        normals: ndarray (K, 3) with unit normal vectors
+    """
+    if field.ndim != 4 or field.shape[0] != 6:
+        raise ValueError("field must be (6, X, Y, Z)")
+
+    xch, ych, zch = field[0], field[1], field[2]
+    vxch, vych, vzch = field[3], field[4], field[5]
+
+    # Consider a voxel selected if any of (x,y,z) channels are non-zero
+    selected = (xch != 0) | (ych != 0) | (zch != 0)
+    idx = np.stack(np.nonzero(selected), axis=1)  # (K, 3) indices in (X,Y,Z)
+    if idx.size == 0:
+        return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.float32)
+
+    # Gather values
+    centers = np.stack([
+        xch[selected].astype(np.float32),
+        ych[selected].astype(np.float32),
+        zch[selected].astype(np.float32),
+    ], axis=1)
+
+    normals = np.stack([
+        vxch[selected].astype(np.float32),
+        vych[selected].astype(np.float32),
+        vzch[selected].astype(np.float32),
+    ], axis=1)
+
+    # Normalize normals defensively
+    n = np.linalg.norm(normals, axis=1, keepdims=True)
+    n[n == 0] = 1.0
+    normals = normals / n
+
+    return centers, normals
+
+
+def save_field_as_relion_star(
+    field: np.ndarray,
+    output_path: Union[str, Path],
+    *,
+    tomogram_name: str = "tomogram",
+    particle_diameter: float = 200.0,
+    voxel_size: Optional[Tuple[float, float, float]] = None,
+) -> None:
+    """
+    Save the voxel sampling field as a RELION 5 particle STAR file.
+
+    Args:
+        field: ndarray (6, X, Y, Z) produced by sample()
+        output_path: destination .star path
+        tomogram_name: RELION tomogram name
+        particle_diameter: particle diameter in Angstroms
+        voxel_size: optional (sx, sy, sz) Angstrom scaling applied to centers
+    """
+    centers, normals = extract_centers_and_normals_from_field(field)
+
+    # Optional scaling by voxel size for physical units
+    if voxel_size is not None and len(centers) > 0:
+        centers = centers * np.array(voxel_size, dtype=np.float32)
+
+    # Defer to utils.relion_utils for STAR writing
+    from tomopanda.utils.relion_utils import convert_to_relion_star
+
+    output_path = Path(output_path)
+    convert_to_relion_star(
+        centers=centers,
+        normals=normals,
+        output_path=output_path,
+        tomogram_name=tomogram_name,
+        particle_diameter=particle_diameter,
+    )
+
+
+def run_voxel_sampling_to_star(
+    mask: np.ndarray,
+    *,
+    min_distance: float,
+    edge_distance: float,
+    output_path: Union[str, Path],
+    tomogram_name: str = "tomogram",
+    particle_diameter: float = 200.0,
+    voxel_size: Optional[Tuple[float, float, float]] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Convenience: run info_extract + sample, then write RELION STAR.
+
+    Returns centers and normals for further use.
+    """
+    surface_mask, orientations = info_extract(mask)
+    field = sample(
+        min_distance=min_distance,
+        edge_distance=edge_distance,
+        surface_mask=surface_mask,
+        orientations=orientations,
+    )
+    save_field_as_relion_star(
+        field,
+        output_path,
+        tomogram_name=tomogram_name,
+        particle_diameter=particle_diameter,
+        voxel_size=voxel_size,
+    )
+    centers, normals = extract_centers_and_normals_from_field(field)
+    return centers, normals
+
+
 __all__ = [
     "info_extract",
     "sample",
+    "extract_centers_and_normals_from_field",
+    "save_field_as_relion_star",
+    "run_voxel_sampling_to_star",
 ]
 
 

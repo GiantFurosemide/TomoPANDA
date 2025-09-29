@@ -63,6 +63,14 @@ Examples:
 
         self._setup_mesh_geodesic_parser(mesh_parser)
 
+        # Voxel-based sampler subcommand
+        voxel_parser = method_subparsers.add_parser(
+            'voxel-sample',
+            help='Voxel-based surface sampling producing RELION 5 particle STAR',
+            description='Extract membrane surface voxels, sample with min-distance, and write RELION 5 STAR'
+        )
+        self._setup_voxel_sample_parser(voxel_parser)
+
         # Do not add common args here to avoid conflicts with existing --output/--verbose
         return parser
 
@@ -70,6 +78,8 @@ Examples:
         """Execute the selected sampling method."""
         if getattr(args, 'method', None) == 'mesh-geodesic':
             return self._run_mesh_geodesic(args)
+        if getattr(args, 'method', None) == 'voxel-sample':
+            return self._run_voxel_sample(args)
         print(f"Unknown sampling method: {getattr(args, 'method', None)}")
         return 1
 
@@ -211,6 +221,216 @@ Examples:
             help='Enable verbose output'
         )
     
+    def _setup_voxel_sample_parser(self, parser: argparse.ArgumentParser):
+        """Setup arguments for voxel-based surface sampling."""
+        # Input options
+        input_group = parser.add_mutually_exclusive_group(required=True)
+        input_group.add_argument(
+            '--mask',
+            type=str,
+            help='Path to membrane mask MRC file'
+        )
+        input_group.add_argument(
+            '--create-synthetic',
+            action='store_true',
+            help='Create synthetic membrane mask for testing'
+        )
+
+        # Output options
+        parser.add_argument(
+            '--output',
+            type=str,
+            default='voxel_sampling_results',
+            help='Output directory for results (default: voxel_sampling_results)'
+        )
+
+        # Sampling parameters
+        parser.add_argument(
+            '--min-distance',
+            type=float,
+            default=20.0,
+            help='Minimum distance between sampling points in pixels (default: 20.0)'
+        )
+        parser.add_argument(
+            '--edge-distance',
+            type=float,
+            default=10.0,
+            help='Edge margin in pixels; avoid sampling within this distance from volume boundary'
+        )
+
+        # Synthetic data parameters
+        parser.add_argument(
+            '--synthetic-shape',
+            type=int,
+            nargs=3,
+            default=[100, 100, 100],
+            metavar=('Z', 'Y', 'X'),
+            help='Shape for synthetic membrane mask (default: 100 100 100)'
+        )
+        parser.add_argument(
+            '--synthetic-center',
+            type=int,
+            nargs=3,
+            default=[50, 50, 50],
+            metavar=('Z', 'Y', 'X'),
+            help='Center for synthetic membrane mask (default: 50 50 50)'
+        )
+        parser.add_argument(
+            '--synthetic-radius',
+            type=int,
+            default=30,
+            help='Radius for synthetic membrane mask (default: 30)'
+        )
+
+        # Output format options
+        parser.add_argument(
+            '--tomogram-name',
+            type=str,
+            default='tomogram',
+            help='Name of the tomogram for RELION output (default: tomogram)'
+        )
+        parser.add_argument(
+            '--particle-diameter',
+            type=float,
+            default=200.0,
+            help='Particle diameter in Angstroms (default: 200.0)'
+        )
+        parser.add_argument(
+            '--voxel-size',
+            type=float,
+            nargs=3,
+            metavar=('X', 'Y', 'Z'),
+            help='Voxel size in Angstroms (X, Y, Z) applied to coordinates'
+        )
+
+        # Visualization and intermediates
+        parser.add_argument(
+            '--save-intermediates',
+            action='store_true',
+            help='Save intermediate MRC volumes: surface mask'
+        )
+        parser.add_argument(
+            '--verbose',
+            action='store_true',
+            help='Enable verbose output'
+        )
+
+    def _run_voxel_sample(self, args: argparse.Namespace) -> int:
+        """Run voxel-based surface sampling and export to RELION 5 STAR."""
+        try:
+            from tomopanda.core.voxel_sample import (
+                info_extract,
+                sample as voxel_sample_run,
+                save_field_as_relion_star,
+                extract_centers_and_normals_from_field,
+            )
+            from tomopanda.utils.mrc_utils import MRCWriter, load_membrane_mask
+            from tomopanda.utils.relion_utils import (
+                convert_to_coordinate_file,
+                convert_to_prior_angles,
+            )
+        except ImportError as e:
+            print(f"Error: Missing required dependencies: {e}")
+            return 1
+
+        # Create output directory
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        print("=== Voxel-based Surface Sampling ===")
+        print(f"Output directory: {output_dir}")
+
+        # Load or create membrane mask
+        if args.create_synthetic:
+            print("Creating synthetic membrane mask...")
+            try:
+                from tomopanda.core.mesh_geodesic import generate_synthetic_mask
+                mask = generate_synthetic_mask(
+                    shape=tuple(args.synthetic_shape),
+                    center=tuple(args.synthetic_center),
+                    radius=args.synthetic_radius,
+                )
+            except Exception as e:
+                print(f"Failed to create synthetic mask: {e}")
+                return 1
+            mask_path = output_dir / "synthetic_mask.mrc"
+            MRCWriter.write_membrane_mask(mask, mask_path)
+            print(f"Saved synthetic mask to: {mask_path}")
+        else:
+            print(f"Loading membrane mask from: {args.mask}")
+            mask = load_membrane_mask(args.mask)
+
+        print(f"Membrane mask shape: {mask.shape}")
+        print(f"Membrane volume fraction: {mask.sum() / mask.size:.3f}")
+
+        # Extract surface and orientations
+        print("\n=== Extracting Surface and Orientations ===")
+        surface_mask, orientations = info_extract(mask)
+        if args.save_intermediates:
+            surface_path = output_dir / "surface_mask.mrc"
+            MRCWriter.write_membrane_mask(surface_mask, surface_path)
+            print(f"  - Surface mask: {surface_path}")
+
+        # Run voxel sampling
+        print("\n=== Sampling Surface Voxels ===")
+        try:
+            field = voxel_sample_run(
+                min_distance=args.min_distance,
+                edge_distance=args.edge_distance,
+                surface_mask=surface_mask,
+                orientations=orientations,
+            )
+        except Exception as e:
+            print(f"Error during voxel sampling: {str(e)}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+            return 1
+
+        centers, normals = extract_centers_and_normals_from_field(field)
+        print(f"Sampling completed successfully with {len(centers)} points.")
+
+        # Save outputs
+        print("\n=== Saving Results ===")
+        if len(centers) == 0:
+            print("No sampling points found. Check your membrane mask or parameters.")
+            return 1
+
+        # STAR file
+        star_file = output_dir / "particles.star"
+        save_field_as_relion_star(
+            field,
+            star_file,
+            tomogram_name=args.tomogram_name,
+            particle_diameter=args.particle_diameter,
+            voxel_size=tuple(args.voxel_size) if args.voxel_size else None,
+        )
+
+        # Coordinate CSV
+        coord_file = output_dir / "coordinates.csv"
+        convert_to_coordinate_file(
+            centers,
+            normals,
+            coord_file,
+            tuple(args.voxel_size) if args.voxel_size else None,
+        )
+
+        # Prior angles CSV
+        prior_file = output_dir / "prior_angles.csv"
+        convert_to_prior_angles(
+            centers,
+            normals,
+            prior_file,
+        )
+
+        print(f"  - RELION STAR: {star_file}")
+        print(f"  - Coordinates: {coord_file}")
+        print(f"  - Prior angles: {prior_file}")
+
+        print("\n=== Voxel Sampling Complete ===")
+        print(f"Total sampling points: {len(centers)}")
+        print(f"Results saved to: {output_dir}")
+        return 0
     def _run_mesh_geodesic(self, args: argparse.Namespace) -> int:
         """Run mesh geodesic sampling."""
         
