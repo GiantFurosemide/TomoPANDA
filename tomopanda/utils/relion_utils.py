@@ -406,7 +406,10 @@ def read_star(filepath: Union[str, Path]) -> pd.DataFrame:
             if in_loop and line.startswith('_'):
                 # column label
                 # keep original but drop leading underscore for DataFrame name
-                col = line[1:]
+                # RELION may append numbering like "#17"; keep only the tag token
+                # Example input: "_rlnCenteredCoordinateXAngst #17"
+                # We want: "rlnCenteredCoordinateXAngst"
+                col = line[1:].split()[0]
                 columns.append(col)
                 continue
             if in_loop:
