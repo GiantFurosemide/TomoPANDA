@@ -401,7 +401,7 @@ Examples:
         save_field_as_relion_star(
             field,
             star_file,
-            tomogram_name=args.tomogram_name,
+            tomogram_name=Path(args.mask).name if args.mask else args.tomogram_name,
             particle_diameter=args.particle_diameter,
             voxel_size=tuple(args.voxel_size) if args.voxel_size else None,
         )
@@ -543,13 +543,14 @@ Examples:
         if len(centers) > 0:
             # Save coordinates as CSV
             coord_file = output_dir / "sampling_coordinates.csv"
-            self._save_coordinates_csv(centers, normals, coord_file)
+            self._save_coordinates_csv(centers, normals, coord_file, 
+                                     tomogram_name=Path(args.mask).name if args.mask else args.tomogram_name)
             
             # Save RELION STAR file
             star_file = output_dir / "particles.star"
             convert_to_relion_star(
                 centers, normals, star_file, 
-                tomogram_name=args.tomogram_name,
+                tomogram_name=Path(args.mask).name if args.mask else args.tomogram_name,
                 particle_diameter=args.particle_diameter
             )
             
@@ -597,7 +598,7 @@ Examples:
             radius=args.synthetic_radius,
         )
     
-    def _save_coordinates_csv(self, centers: np.ndarray, normals: np.ndarray, filepath: Path):
+    def _save_coordinates_csv(self, centers: np.ndarray, normals: np.ndarray, filepath: Path, tomogram_name: str = 'tomogram'):
         """Deprecated local writer; use core.save_sampling_outputs instead."""
         from tomopanda.core.mesh_geodesic import save_sampling_outputs
         out_dir = filepath.parent
@@ -605,7 +606,7 @@ Examples:
             out_dir,
             centers,
             normals,
-            tomogram_name='tomogram',
+            tomogram_name=tomogram_name,
             particle_diameter=200.0,
             create_vis_script=False,
         )
