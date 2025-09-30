@@ -4,6 +4,8 @@ TomoPANDA安装脚本
 """
 
 from setuptools import setup, find_packages
+import pathlib
+import re
 import os
 
 # 读取README文件
@@ -19,9 +21,18 @@ def read_requirements():
             requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
     return requirements
 
+def read_version():
+    init_path = pathlib.Path("tomopanda/__init__.py")
+    text = init_path.read_text(encoding="utf-8")
+    m = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.M)
+    if not m:
+        raise RuntimeError("Version not found in tomopanda/__init__.py")
+    return m.group(1)
+
+
 setup(
     name="tomopanda",
-    version="0.1.0",
+    version=read_version(),
     author="TomoPANDA Team",
     author_email="contact@tomopanda.org",
     description="基于SE(3)等变变换器的CryoET膜蛋白检测工具",
