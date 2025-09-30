@@ -396,12 +396,18 @@ Examples:
             print("No sampling points found. Check your membrane mask or parameters.")
             return 1
 
+        # Determine tomogram name: prefer explicit --tomogram-name, else use full --mask path
+        tomogram_name_value = (
+            args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram'
+            else (args.mask if getattr(args, 'mask', None) else 'tomogram')
+        )
+
         # STAR file
         star_file = output_dir / "particles.star"
         save_field_as_relion_star(
             field,
             star_file,
-            tomogram_name=Path(args.mask).name if args.mask else args.tomogram_name,
+            tomogram_name=tomogram_name_value,
             particle_diameter=args.particle_diameter,
             voxel_size=tuple(args.voxel_size) if args.voxel_size else None,
         )
@@ -544,13 +550,13 @@ Examples:
             # Save coordinates as CSV
             coord_file = output_dir / "sampling_coordinates.csv"
             self._save_coordinates_csv(centers, normals, coord_file, 
-                                     tomogram_name=Path(args.mask).name if args.mask else args.tomogram_name)
+                                     tomogram_name=(args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram' else (args.mask if getattr(args, 'mask', None) else 'tomogram')))
             
             # Save RELION STAR file
             star_file = output_dir / "particles.star"
             convert_to_relion_star(
                 centers, normals, star_file, 
-                tomogram_name=Path(args.mask).name if args.mask else args.tomogram_name,
+                tomogram_name=(args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram' else (args.mask if getattr(args, 'mask', None) else 'tomogram')),
                 particle_diameter=args.particle_diameter
             )
             
