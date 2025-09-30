@@ -288,99 +288,34 @@ def save_subtomogram_coordinates(centers: np.ndarray,
     
     euler_angles = np.array(euler_angles)
     
-    # Create STAR file data with RELION 5 subtomogram format
+    # Create STAR file data with only requested columns
     import pandas as pd
-    
-    data = {
-        # Tomogram information
+
+    df = pd.DataFrame({
+        'rlnCoordinateX': centers_scaled[:, 0],
+        'rlnCoordinateY': centers_scaled[:, 1],
+        'rlnCoordinateZ': centers_scaled[:, 2],
+        'rlnTomoSubtomogramRot': euler_angles[:, 2],
+        'rlnTomoSubtomogramTilt': euler_angles[:, 0],
+        'rlnTomoSubtomogramPsi': euler_angles[:, 1],
         'rlnTomoName': [tomogram_name] * len(centers),
-        
-        # RELION 5 subtomogram rotation tags (primary)
-        'rlnTomoSubtomogramRot': euler_angles[:, 2],    # rot angle
-        'rlnTomoSubtomogramTilt': euler_angles[:, 0],   # tilt angle  
-        'rlnTomoSubtomogramPsi': euler_angles[:, 1],    # psi angle
-        
-        # Legacy angle tags for compatibility
-        'rlnAngleRot': euler_angles[:, 2],
-        'rlnAngleTilt': euler_angles[:, 0],
-        'rlnAnglePsi': euler_angles[:, 1],
-        
-        # Prior angles for subtomogram averaging
-        'rlnAngleTiltPrior': euler_angles[:, 0],
-        'rlnAnglePsiPrior': euler_angles[:, 1],
-        
-        # Optics group (required for RELION 5)
-        'rlnOpticsGroup': [1] * len(centers),
-        
-        # Particle names
-        'rlnTomoParticleName': [f"{tomogram_name}_{i:06d}" for i in range(len(centers))],
-        
-        # Visible frames (for subtomogram processing)
-        'rlnTomoVisibleFrames': [1] * len(centers),
-        
-        # Image names (placeholder for subtomogram files)
-        'rlnImageName': [f"{tomogram_name}_{i:06d}.mrc" for i in range(len(centers))],
-        
-        # Origin coordinates (in Angstroms)
-        'rlnOriginXAngst': [0.0] * len(centers),
-        'rlnOriginYAngst': [0.0] * len(centers),
-        'rlnOriginZAngst': [0.0] * len(centers),
-        
-        # Centered coordinates (in Angstroms) - these are the actual particle positions
-        'rlnCenteredCoordinateXAngst': centers_scaled[:, 0],
-        'rlnCenteredCoordinateYAngst': centers_scaled[:, 1], 
-        'rlnCenteredCoordinateZAngst': centers_scaled[:, 2],
-    }
-    
-    # Create DataFrame
-    df = pd.DataFrame(data)
-    
-    # Write STAR file with proper RELION 5 subtomogram format
+        'rlnTomoParticleId': list(range(len(centers))),
+    })
+
+    # Write simple RELION loop with only these columns
     filepath = Path(filepath)
     with open(filepath, 'w') as f:
-        # Write header matching the provided format
-        f.write("# version 50001\n\n")
-        f.write("data_particles\n\n")
+        f.write("data_\n\n")
         f.write("loop_\n")
-        
-        # Write column labels in the exact order from the provided header
-        column_order = [
-            'rlnTomoName',
-            'rlnTomoSubtomogramRot', 
-            'rlnTomoSubtomogramTilt',
-            'rlnTomoSubtomogramPsi',
-            'rlnAngleRot',
-            'rlnAngleTilt',
-            'rlnAnglePsi',
-            'rlnAngleTiltPrior',
-            'rlnAnglePsiPrior',
-            'rlnOpticsGroup',
-            'rlnTomoParticleName',
-            'rlnTomoVisibleFrames',
-            'rlnImageName',
-            'rlnOriginXAngst',
-            'rlnOriginYAngst',
-            'rlnOriginZAngst',
-            'rlnCenteredCoordinateXAngst',
-            'rlnCenteredCoordinateYAngst',
-            'rlnCenteredCoordinateZAngst',
-        ]
-        
-        # Write column labels with numbers
-        for i, col in enumerate(column_order, 1):
-            if col in df.columns:
-                f.write(f"_{col} #{i}\n")
-        
-        # Write data rows
+        for col in df.columns:
+            f.write(f"_{col}\n")
         for _, row in df.iterrows():
-            values = []
-            for col in column_order:
-                if col in df.columns:
-                    val = row[col]
-                    if isinstance(val, float):
-                        values.append(f"{val:.6f}")
-                    else:
-                        values.append(str(val))
-            f.write(" ".join(values) + "\n")
-    
-    print(f"Saved {len(centers)} subtomogram particles to RELION 5 STAR file: {filepath}")
+            vals = []
+            for val in row.values:
+                if isinstance(val, float):
+                    vals.append(f"{val:.6f}")
+                else:
+                    vals.append(str(val))
+            f.write(" ".join(vals) + "\n")
+
+    print(f"Saved {len(centers)} subtomogram particles to RELION STAR file: {filepath}")

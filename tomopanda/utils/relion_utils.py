@@ -152,48 +152,18 @@ class RELIONConverter:
         for normal in normals:
             tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
             euler_angles.append([tilt, psi, rot])
-        
-        euler_angles = np.array(euler_angles)
-        
-        # Create STAR file data with RELION 5 subtomogram tags
+        euler_angles = np.array(euler_angles) if len(euler_angles) > 0 else np.zeros((len(centers), 3), dtype=float)
+
+        # By default, write ONLY the requested keys; legacy angle tags are omitted.
         data = {
             'rlnCoordinateX': centers[:, 0],
-            'rlnCoordinateY': centers[:, 1], 
+            'rlnCoordinateY': centers[:, 1],
             'rlnCoordinateZ': centers[:, 2],
-            # RELION 5 subtomogram rotation tags
-            'rlnTomoSubtomogramRot': euler_angles[:, 2],    # rot angle
-            'rlnTomoSubtomogramTilt': euler_angles[:, 0],   # tilt angle  
-            'rlnTomoSubtomogramPsi': euler_angles[:, 1],    # psi angle
-            # Legacy angle tags for compatibility
-            'rlnAngleTilt': euler_angles[:, 0],
-            'rlnAnglePsi': euler_angles[:, 1],
-            'rlnAngleRot': euler_angles[:, 2],
+            'rlnTomoSubtomogramRot': euler_angles[:, 2],
+            'rlnTomoSubtomogramTilt': euler_angles[:, 0],
+            'rlnTomoSubtomogramPsi': euler_angles[:, 1],
             'rlnTomoName': [tomogram_name] * len(centers),
-            'rlnTomoParticleId': range(len(centers)),
-            'rlnClassNumber': [1] * len(centers),
-            'rlnAutopickFigureOfMerit': [confidence] * len(centers),
-            'rlnCtfMaxResolution': [4.0] * len(centers),
-            'rlnCtfFigureOfMerit': [0.8] * len(centers),
-            'rlnCtfBfactor': [0.0] * len(centers),
-            'rlnCtfScalefactor': [1.0] * len(centers),
-            'rlnDefocusU': [0.0] * len(centers),
-            'rlnDefocusV': [0.0] * len(centers),
-            'rlnDefocusAngle': [0.0] * len(centers),
-            'rlnPhaseShift': [0.0] * len(centers),
-            'rlnCtfValue': [0.0] * len(centers),
-            'rlnGroupNumber': [1] * len(centers),
-            'rlnOriginX': [0.0] * len(centers),
-            'rlnOriginY': [0.0] * len(centers),
-            'rlnOriginZ': [0.0] * len(centers),
-            'rlnRandomSubset': [1] * len(centers),
-            'rlnParticleSelectZScore': [0.0] * len(centers),
-            'rlnHelicalTubeID': [0] * len(centers),
-            'rlnHelicalTrackLength': [0.0] * len(centers),
-            # Prior angles for subtomogram averaging
-            'rlnAngleTiltPrior': euler_angles[:, 0],
-            'rlnAnglePsiPrior': euler_angles[:, 1],
-            'rlnAngleRotPrior': euler_angles[:, 2],
-            'rlnTomoParticleDiameter': [particle_diameter] * len(centers)
+            'rlnTomoParticleId': list(range(len(centers))),
         }
         
         # Create DataFrame
@@ -212,8 +182,13 @@ class RELIONConverter:
             
             # Write data
             for _, row in df.iterrows():
-                f.write(" ".join([f"{val:.6f}" if isinstance(val, float) else str(val) 
-                                for val in row.values]) + "\n")
+                out_vals = []
+                for val in row.values:
+                    if isinstance(val, float):
+                        out_vals.append(f"{val:.6f}")
+                    else:
+                        out_vals.append(str(val))
+                f.write(" ".join(out_vals) + "\n")
         
         print(f"Saved {len(centers)} particles to RELION STAR file: {output_path}")
     
