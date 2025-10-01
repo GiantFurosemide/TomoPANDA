@@ -18,6 +18,14 @@ from .core.mesh_geodesic import (
     create_visualization_script,
 )
 
+# Re-export dynamo conversion utilities for convenience
+from .utils.dynamo_relion_convert_util import (
+    DynamoConverter,
+    relion_star_to_dynamo_tbl_vll,
+    convert_matrix_to_tbl,
+    convert_relion_to_dynamo
+)
+
 __all__ = [
     "main",
     "create_mesh_geodesic_sampler",
@@ -25,4 +33,8 @@ __all__ = [
     "run_mesh_geodesic_sampling",
     "save_sampling_outputs",
     "create_visualization_script",
+    "DynamoConverter",
+    "relion_star_to_dynamo_tbl_vll",
+    "convert_matrix_to_tbl",
+    "convert_relion_to_dynamo"
 ]
