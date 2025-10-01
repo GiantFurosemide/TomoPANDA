@@ -359,6 +359,7 @@ Examples:
         else:
             print(f"Loading membrane mask from: {args.mask}")
             mask = load_membrane_mask(args.mask)
+            mask_path = Path(args.mask)
 
         print(f"Membrane mask shape: {mask.shape}")
         print(f"Membrane volume fraction: {mask.sum() / mask.size:.3f}")
@@ -396,10 +397,10 @@ Examples:
             print("No sampling points found. Check your membrane mask or parameters.")
             return 1
 
-        # Determine tomogram name: prefer explicit --tomogram-name, else use full --mask path
+        # Determine tomogram name and mask_path for derivation
+        # If user provided explicit name (not default), use it; otherwise pass None to trigger derivation from mask_path
         tomogram_name_value = (
-            args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram'
-            else (args.mask if getattr(args, 'mask', None) else 'tomogram')
+            args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram' else None
         )
 
         # STAR file
@@ -408,6 +409,7 @@ Examples:
             field,
             star_file,
             tomogram_name=tomogram_name_value,
+            mask_path=mask_path,
             particle_diameter=args.particle_diameter,
             voxel_size=tuple(args.voxel_size) if args.voxel_size else None,
         )

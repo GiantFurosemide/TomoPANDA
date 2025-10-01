@@ -256,7 +256,8 @@ def save_field_as_relion_star(
     field: np.ndarray,
     output_path: Union[str, Path],
     *,
-    tomogram_name: str = "tomogram",
+    tomogram_name: Optional[str] = None,
+    mask_path: Optional[Union[str, Path]] = None,
     particle_diameter: float = 200.0,
     voxel_size: Optional[Tuple[float, float, float]] = None,
 ) -> None:
@@ -266,7 +267,8 @@ def save_field_as_relion_star(
     Args:
         field: ndarray (6, X, Y, Z) produced by sample()
         output_path: destination .star path
-        tomogram_name: RELION tomogram name
+        tomogram_name: RELION tomogram name; if None, will be derived from mask_path
+        mask_path: optional path to the mask .mrc for default tomogram name derivation
         particle_diameter: particle diameter in Angstroms
         voxel_size: optional (sx, sy, sz) Angstrom scaling applied to centers
     """
@@ -276,7 +278,22 @@ def save_field_as_relion_star(
     if voxel_size is not None and len(centers) > 0:
         centers = centers * np.array(voxel_size, dtype=np.float32)
 
-    # Defer to utils.relion_utils for STAR writing
+    # Resolve tomogram name: CLI-specified or derived from mask path
+    if tomogram_name is None or len(str(tomogram_name)) == 0:
+        if mask_path is not None:
+            mp = Path(mask_path)
+            name = mp.name
+            # strip .mrc suffix if present
+            if name.lower().endswith('.mrc'):
+                name = name[:-4]
+            # strip leading "rec_" prefix if present
+            if name.startswith('rec_'):
+                name = name[4:]
+            tomogram_name = name
+        else:
+            tomogram_name = "tomogram"
+
+    # Defer to utils.relion_utils for STAR writing (RELION 5 format with data_optics)
     from tomopanda.utils.relion_utils import convert_to_relion_star
 
     output_path = Path(output_path)
@@ -295,7 +312,8 @@ def run_voxel_sampling_to_star(
     min_distance: float,
     edge_distance: float,
     output_path: Union[str, Path],
-    tomogram_name: str = "tomogram",
+    tomogram_name: Optional[str] = None,
+    mask_path: Optional[Union[str, Path]] = None,
     particle_diameter: float = 200.0,
     voxel_size: Optional[Tuple[float, float, float]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -315,6 +333,7 @@ def run_voxel_sampling_to_star(
         field,
         output_path,
         tomogram_name=tomogram_name,
+        mask_path=mask_path,
         particle_diameter=particle_diameter,
         voxel_size=voxel_size,
     )

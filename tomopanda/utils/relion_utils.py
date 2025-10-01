@@ -125,12 +125,21 @@ class RELIONConverter:
         return d / (n if n > 0 else 1.0)
     
     @staticmethod
-    def create_star_file(centers: np.ndarray, 
+    def create_star_file(centers: np.ndarray,
                         normals: np.ndarray,
                         output_path: Union[str, Path],
                         tomogram_name: str = "tomogram",
                         particle_diameter: float = 200.0,
-                        confidence: float = 0.5) -> None:
+                        confidence: float = 0.5,
+                        *,
+                        relion_version: int = 50001,
+                        optics_group: int = 1,
+                        optics_group_name: str = "opticgroup1",
+                        tomo_tilt_series_pixel_size: float = 1.68,
+                        micrograph_original_pixel_size: float = 0.84,
+                        voltage_kv: float = 300.0,
+                        spherical_aberration_mm: float = 2.7,
+                        amplitude_contrast: float = 0.1) -> None:
         """
         Create RELION STAR file for subtomogram particle coordinates.
         
@@ -154,8 +163,8 @@ class RELIONConverter:
             euler_angles.append([tilt, psi, rot])
         euler_angles = np.array(euler_angles) if len(euler_angles) > 0 else np.zeros((len(centers), 3), dtype=float)
 
-        # By default, write ONLY the requested keys; legacy angle tags are omitted.
-        data = {
+        # Prepare particle table including optics group
+        data_particles = {
             'rlnCoordinateX': centers[:, 0],
             'rlnCoordinateY': centers[:, 1],
             'rlnCoordinateZ': centers[:, 2],
@@ -164,24 +173,38 @@ class RELIONConverter:
             'rlnTomoSubtomogramPsi': euler_angles[:, 1],
             'rlnTomoName': [tomogram_name] * len(centers),
             'rlnTomoParticleId': list(range(len(centers))),
+            'rlnOpticsGroup': [int(optics_group)] * len(centers),
         }
-        
-        # Create DataFrame
-        df = pd.DataFrame(data)
-        
-        # Write STAR file
+
+        df_particles = pd.DataFrame(data_particles)
+
+        # Write RELION 5 style STAR with data_optics and data_particles
         output_path = Path(output_path)
         with open(output_path, 'w') as f:
-            # Write header
-            f.write("data_\n\n")
+            # Version header
+            f.write(f"# version {relion_version}\n\n")
+
+            # data_optics block
+            f.write("data_optics\n\n")
             f.write("loop_\n")
-            
-            # Write column labels
-            for col in df.columns:
-                f.write(f"_{col}\n")
-            
-            # Write data
-            for _, row in df.iterrows():
+            f.write("_rlnOpticsGroup #1\n")
+            f.write("_rlnOpticsGroupName #2\n")
+            f.write("_rlnTomoTiltSeriesPixelSize #3\n")
+            f.write("_rlnMicrographOriginalPixelSize #4\n")
+            f.write("_rlnVoltage #5\n")
+            f.write("_rlnSphericalAberration #6\n")
+            f.write("_rlnAmplitudeContrast #7\n")
+            f.write(
+                f"{int(optics_group)} {optics_group_name} {tomo_tilt_series_pixel_size:010.6f} {micrograph_original_pixel_size:010.6f} {voltage_kv:010.6f} {spherical_aberration_mm:010.6f} {amplitude_contrast:010.6f}\n\n\n"
+            )
+
+            # Second version header and data_particles block
+            f.write(f"# version {relion_version}\n\n")
+            f.write("data_particles\n\n")
+            f.write("loop_\n")
+            for i, col in enumerate(df_particles.columns, start=1):
+                f.write(f"_{col} #{i} \n")
+            for _, row in df_particles.iterrows():
                 out_vals = []
                 for val in row.values:
                     if isinstance(val, float):
@@ -189,8 +212,8 @@ class RELIONConverter:
                     else:
                         out_vals.append(str(val))
                 f.write(" ".join(out_vals) + "\n")
-        
-        print(f"Saved {len(centers)} particles to RELION STAR file: {output_path}")
+
+        print(f"Saved {len(centers)} particles to RELION STAR file (RELION {relion_version}): {output_path}")
     
     @staticmethod
     def create_coordinate_file(centers: np.ndarray,
@@ -289,7 +312,16 @@ def convert_to_relion_star(centers: np.ndarray,
                           normals: np.ndarray,
                           output_path: Union[str, Path],
                           tomogram_name: str = "tomogram",
-                          particle_diameter: float = 200.0) -> None:
+                          particle_diameter: float = 200.0,
+                          *,
+                          relion_version: int = 50001,
+                          optics_group: int = 1,
+                          optics_group_name: str = "opticgroup1",
+                          tomo_tilt_series_pixel_size: float = 1.68,
+                          micrograph_original_pixel_size: float = 0.84,
+                          voltage_kv: float = 300.0,
+                          spherical_aberration_mm: float = 2.7,
+                          amplitude_contrast: float = 0.1) -> None:
     """
     Convenience function to convert coordinates to RELION STAR format.
     
@@ -301,7 +333,19 @@ def convert_to_relion_star(centers: np.ndarray,
         particle_diameter: Particle diameter in Angstroms
     """
     RELIONConverter.create_star_file(
-        centers, normals, output_path, tomogram_name, particle_diameter
+        centers,
+        normals,
+        output_path,
+        tomogram_name,
+        particle_diameter,
+        relion_version=relion_version,
+        optics_group=optics_group,
+        optics_group_name=optics_group_name,
+        tomo_tilt_series_pixel_size=tomo_tilt_series_pixel_size,
+        micrograph_original_pixel_size=micrograph_original_pixel_size,
+        voltage_kv=voltage_kv,
+        spherical_aberration_mm=spherical_aberration_mm,
+        amplitude_contrast=amplitude_contrast,
     )
 
 
