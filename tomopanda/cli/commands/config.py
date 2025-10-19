@@ -1,5 +1,5 @@
 """
-配置管理命令
+Configuration management command
 tomopanda config <action> [options]
 """
 
@@ -12,68 +12,68 @@ from .base import BaseCommand
 
 
 class ConfigCommand(BaseCommand):
-    """配置管理命令"""
+    """Configuration management command"""
     
     def get_name(self) -> str:
         return "config"
     
     def get_description(self) -> str:
-        return "管理TomoPANDA配置"
+        return "Manage TomoPANDA configuration"
     
     def add_parser(self, subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
         parser = subparsers.add_parser(
             self.name,
             help=self.description,
-            description="管理TomoPANDA的配置文件"
+            description="Manage TomoPANDA configuration files"
         )
         
-        # 子命令
+        # Subcommands
         subparsers_config = parser.add_subparsers(
             dest='action',
-            help='配置操作',
+            help='Configuration operations',
             metavar='<action>'
         )
         
-        # 初始化配置
+        # Initialize configuration
         init_parser = subparsers_config.add_parser(
             'init',
-            help='初始化配置文件'
+            help='Initialize configuration file'
         )
         init_parser.add_argument(
             '--template',
             choices=['detect', 'train', 'analyze'],
             default='detect',
-            help='配置模板 (默认: detect)'
+            help='Configuration template (default: detect)'
         )
         init_parser.add_argument(
             '--force',
             action='store_true',
-            help='覆盖现有配置文件'
+            help='Overwrite existing configuration file'
         )
         
-        # 显示配置
+        # Show configuration
         show_parser = subparsers_config.add_parser(
             'show',
-            help='显示当前配置'
+            help='Show current configuration'
         )
         show_parser.add_argument(
             '--section',
             type=str,
-            help='显示特定配置节'
+            help='Show specific configuration section'
         )
         
-        # 验证配置
+        # Validate configuration
         validate_parser = subparsers_config.add_parser(
             'validate',
-            help='验证配置文件'
+            help='Validate configuration file'
         )
         validate_parser.add_argument(
             'config_file',
             type=str,
-            help='要验证的配置文件'
+            help='Configuration file to validate'
         )
         
-        # 添加通用参数
+        # Add common arguments
         self.add_common_args(parser)
         
         return parser

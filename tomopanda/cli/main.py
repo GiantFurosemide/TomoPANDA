@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-TomoPANDA主命令行入口点
-支持多命令架构: tomopanda <command> <args...>
+TomoPANDA main command line entry point
+Supports multi-command architecture: tomopanda <command> <args...>
 """
 
 import sys
@@ -18,7 +18,7 @@ from .commands.sample import SampleCommand
 
 
 class TomoPandaCLI:
-    """TomoPANDA命令行接口主类"""
+    """TomoPANDA main command line interface class"""
     
     def __init__(self):
         self.commands = {
@@ -32,22 +32,22 @@ class TomoPandaCLI:
         }
     
     def create_parser(self) -> argparse.ArgumentParser:
-        """创建主参数解析器"""
+        """Create main argument parser"""
         parser = argparse.ArgumentParser(
             prog='tomopanda',
-            description='TomoPANDA - CryoET膜蛋白检测工具',
-            epilog='使用 "tomopanda <command> --help" 查看特定命令的帮助信息',
+            description='TomoPANDA - CryoET membrane protein detection tool',
+            epilog='Use "tomopanda <command> --help" to view help for specific commands',
             formatter_class=argparse.RawDescriptionHelpFormatter
         )
         
-        # 添加子命令
+        # Add subcommands
         subparsers = parser.add_subparsers(
-            dest='command', # 告诉主解析器：子命令存储在 'command' 属性中
+            dest='command', # Tell main parser: subcommands are stored in 'command' attribute
             help='commands',
             metavar='<command>'
         )
         
-        # 为每个命令创建子解析器
+        # Create subparser for each command
         for name, command in self.commands.items():
             command.add_parser(subparsers)
         

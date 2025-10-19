@@ -94,13 +94,20 @@ tomopanda sample mesh-geodesic --create-synthetic --output results/
 # 使用真实膜掩码
 tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
 
-# 自定义参数
+# 自定义参数 (使用expected particle size - taubin iterations会自动计算)
 tomopanda sample mesh-geodesic \
     --mask membrane_mask.mrc \
     --output results/ \
-    --min-distance 25.0 \
-    --particle-radius 12.0 \
+    --expected-particle-size 25.0 \
     --smoothing-sigma 2.0 \
+    --verbose
+
+# 替代方案: 使用手动taubin iterations (不使用expected particle size)
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --smoothing-sigma 2.0 \
+    --taubin-iterations 15 \
     --verbose
 ```
 

@@ -1,5 +1,5 @@
 """
-版本信息命令
+Version information command
 tomopanda version [options]
 """
 
@@ -11,35 +11,35 @@ from .base import BaseCommand
 
 
 class VersionCommand(BaseCommand):
-    """版本信息命令"""
+    """Version information command"""
     
     def get_name(self) -> str:
         return "version"
     
     def get_description(self) -> str:
-        return "显示TomoPANDA版本信息"
+        return "Display TomoPANDA version information"
     
     def add_parser(self, subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
         parser = subparsers.add_parser(
             self.name,
             help=self.description,
-            description="显示TomoPANDA的版本信息和系统信息"
+            description="Display TomoPANDA version information and system information"
         )
         
-        # 版本参数
+        # Version parameters
         parser.add_argument(
             '--short', '-s',
             action='store_true',
-            help='只显示版本号'
+            help='Show only version number'
         )
         
-        # 添加通用参数
+        # Add common arguments
         self.add_common_args(parser)
         
         return parser
     
     def execute(self, args: argparse.Namespace) -> int:
-        """执行版本命令"""
+        """Execute version command"""
         try:
             if args.short:
                 print(self._get_version())
@@ -48,14 +48,14 @@ class VersionCommand(BaseCommand):
             return 0
             
         except Exception as e:
-            print(f"获取版本信息时发生错误: {e}")
+            print(f"Error occurred while getting version information: {e}")
             if args.verbose:
                 import traceback
                 traceback.print_exc()
             return 1
     
     def _get_version(self) -> str:
-        """获取版本号"""
+        """Get version number"""
         try:
             from tomopanda import __version__
             return __version__
@@ -63,28 +63,28 @@ class VersionCommand(BaseCommand):
             return "0.1.0"
     
     def _print_version_info(self, verbose: bool) -> None:
-        """打印版本信息"""
+        """Print version information"""
         print(f"TomoPANDA {self._get_version()}")
         
         if verbose:
-            print(f"Python版本: {sys.version}")
-            print(f"平台: {sys.platform}")
+            print(f"Python version: {sys.version}")
+            print(f"Platform: {sys.platform}")
             
             # 显示依赖包版本
             try:
                 import torch
-                print(f"PyTorch版本: {torch.__version__}")
+                print(f"PyTorch version: {torch.__version__}")
             except ImportError:
-                print("PyTorch: 未安装")
+                print("PyTorch: Not installed")
             
             try:
                 import numpy
-                print(f"NumPy版本: {numpy.__version__}")
+                print(f"NumPy version: {numpy.__version__}")
             except ImportError:
-                print("NumPy: 未安装")
+                print("NumPy: Not installed")
             
             try:
                 import scipy
-                print(f"SciPy版本: {scipy.__version__}")
+                print(f"SciPy version: {scipy.__version__}")
             except ImportError:
-                print("SciPy: 未安装")
+                print("SciPy: Not installed")

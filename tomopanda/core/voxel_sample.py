@@ -276,16 +276,17 @@ def save_field_as_relion_star(
     if voxel_size is not None and len(centers) > 0:
         centers = centers * np.array(voxel_size, dtype=np.float32)
 
-    # Defer to utils.relion_utils for STAR writing
-    from tomopanda.utils.relion_utils import convert_to_relion_star
+    # Use simplified RELION format (like mesh_geodesic.py)
+    from tomopanda.core.mesh_geodesic import _save_simplified_relion_star
 
     output_path = Path(output_path)
-    convert_to_relion_star(
+    _save_simplified_relion_star(
         centers=centers,
         normals=normals,
         output_path=output_path,
         tomogram_name=tomogram_name,
         particle_diameter=particle_diameter,
+        voxel_size=voxel_size,
     )
 
 

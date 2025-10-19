@@ -9,11 +9,9 @@ Author: TomoPANDA Team
 """
 
 import numpy as np
-from typing import Tuple, Optional, List, Union
+from typing import Tuple, Optional, Union
 from scipy.ndimage import gaussian_filter, distance_transform_edt as edt, binary_erosion
 from scipy.spatial import cKDTree
-from scipy.sparse import coo_matrix, csr_matrix
-from scipy.sparse.csgraph import dijkstra
 from skimage.measure import marching_cubes
 import open3d as o3d
 from pathlib import Path
@@ -26,7 +24,6 @@ from tomopanda.utils.relion_utils import (
     convert_to_coordinate_file,
     convert_to_prior_angles,
 )
-from tomopanda.utils.mrc_utils import MRCWriter
 
 
 class MeshGeodesicSampler:
@@ -40,31 +37,74 @@ class MeshGeodesicSampler:
     def __init__(self, 
                  smoothing_sigma: float = 1.5,
                  taubin_iterations: int = 10,
-                 min_distance: float = 20.0):
+                 expected_particle_size: Optional[float] = None,
+                 random_seed: Optional[int] = None):
         """
         Initialize the mesh geodesic sampler.
         
         Args:
             smoothing_sigma: Gaussian smoothing parameter for mask preprocessing
             taubin_iterations: Number of Taubin smoothing iterations
-            min_distance: Minimum distance between sampling points
+            expected_particle_size: Expected particle size in pixels for mesh density control
+            random_seed: Random seed for mesh generation (None for deterministic)
         """
         self.smoothing_sigma = smoothing_sigma
         self.taubin_iterations = taubin_iterations
-        self.min_distance = min_distance
+        self.expected_particle_size = expected_particle_size
+        self.random_seed = random_seed
+    
+    def _get_sampling_distance(self) -> float:
+        """
+        Calculate sampling distance based on expected_particle_size.
         
-    def create_signed_distance_field(self, mask: np.ndarray) -> np.ndarray:
+        Returns:
+            Minimum distance between sampling points
+        """
+        if self.expected_particle_size is not None:
+            # Use particle size to determine sampling distance
+            # Rule: sampling distance = particle_size / 2 for optimal coverage
+            return max(5.0, self.expected_particle_size / 2.0)
+        else:
+            # Default fallback
+            return 20.0
+        
+    def create_signed_distance_field(self, mask: np.ndarray, target_resolution: float = None) -> np.ndarray:
         """
         Create signed distance field from binary mask.
         
         Args:
             mask: Binary mask (0/1) indicating membrane regions
+            target_resolution: Target resolution for mesh generation (pixels per voxel)
             
         Returns:
             Signed distance field where phi>0 is outside membrane, phi<0 is inside
         """
+        # Set random seed if provided
+        if self.random_seed is not None:
+            np.random.seed(self.random_seed)
+        
+        # Adaptive resolution based on expected particle size
+        if target_resolution is None and self.expected_particle_size is not None:
+            # Calculate target resolution: smaller particles need finer resolution
+            # Rule: resolution = particle_size / 5 (gives ~5 voxels per particle)
+            target_resolution = max(0.5, min(3.0, self.expected_particle_size / 5.0))
+        
+        # Apply resolution scaling if needed
+        if target_resolution is not None and target_resolution != 1.0:
+            # Downsample mask for coarser mesh
+            from scipy.ndimage import zoom
+            scale_factor = 1.0 / target_resolution
+            mask = zoom(mask, scale_factor, order=1)  # Linear interpolation
+        
         # Apply Gaussian smoothing to reduce noise
         mask_smooth = gaussian_filter(mask.astype(float), sigma=self.smoothing_sigma)
+        
+        # Add random noise to introduce mesh variation (if random_seed is provided)
+        if self.random_seed is not None:
+            # Add small random noise to create mesh variation
+            noise_scale = 0.1 * self.smoothing_sigma  # Scale noise with smoothing
+            random_noise = np.random.normal(0, noise_scale, mask_smooth.shape)
+            mask_smooth = mask_smooth + random_noise
         
         # Create signed distance field: outside - inside
         phi = edt(1 - (mask_smooth > 0.5)) - edt((mask_smooth > 0.5))
@@ -72,7 +112,7 @@ class MeshGeodesicSampler:
         return phi
     
     def extract_mesh_from_sdf(self, phi: np.ndarray, 
-                            spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> o3d.geometry.TriangleMesh:
+                            spacing: Tuple[float, float, float] = None) -> o3d.geometry.TriangleMesh:
         """
         Extract triangular mesh from signed distance field using marching cubes.
         
@@ -83,6 +123,16 @@ class MeshGeodesicSampler:
         Returns:
             Open3D triangle mesh
         """
+        # Calculate adaptive spacing based on expected particle size
+        if spacing is None:
+            if self.expected_particle_size is not None:
+                # Adaptive spacing: larger particles -> coarser mesh
+                # Scale factor: particle_size / 10 gives reasonable mesh density
+                scale_factor = max(0.5, min(5.0, self.expected_particle_size / 10.0))
+                spacing = (scale_factor, scale_factor, scale_factor)
+            else:
+                spacing = (1.0, 1.0, 1.0)
+        
         # Marching cubes on phi=0 level set
         verts, faces, _, _ = marching_cubes(phi, level=0.0, spacing=spacing)
         
@@ -96,8 +146,55 @@ class MeshGeodesicSampler:
         mesh.remove_duplicated_vertices()
         mesh.remove_degenerate_triangles()
         
-        # Apply Taubin smoothing
-        mesh = mesh.filter_smooth_taubin(number_of_iterations=self.taubin_iterations)
+        # Apply adaptive mesh processing based on expected particle size
+        if self.expected_particle_size is not None:
+            # Multi-level control of mesh hole size based on particle size
+            particle_size = self.expected_particle_size
+            
+            # Level 1: Calculate target triangle size (hole size = triangle size)
+            # Rule: triangle size should be ~particle_size/3 for optimal sampling
+            target_triangle_size = particle_size / 3.0
+            
+            # Level 2: Calculate taubin iterations for triangle size control
+            import math
+            if particle_size <= 1:
+                adaptive_iterations = 3  # Very fine mesh
+            elif particle_size <= 5:
+                adaptive_iterations = 5  # Fine mesh
+            elif particle_size <= 10:
+                adaptive_iterations = 8  # Medium-fine mesh
+            elif particle_size <= 20:
+                adaptive_iterations = 12  # Medium mesh
+            elif particle_size <= 50:
+                adaptive_iterations = 18  # Medium-coarse mesh
+            elif particle_size <= 100:
+                adaptive_iterations = 25  # Coarse mesh
+            elif particle_size <= 200:
+                adaptive_iterations = 30  # Very coarse mesh
+            else:
+                adaptive_iterations = 35  # Maximum smoothing
+            
+            # Apply taubin smoothing for triangle size control
+            mesh = mesh.filter_smooth_taubin(number_of_iterations=adaptive_iterations)
+            
+            # Level 3: Mesh decimation for large particles (direct hole size control)
+            if target_triangle_size > 15:  # For large particles, reduce triangle count
+                # Calculate target number of triangles based on particle size
+                # Rule: ~1 triangle per particle_size^2 area
+                target_triangles = max(50, int(1000 / (particle_size / 10)))
+                
+                if len(mesh.triangles) > target_triangles:
+                    print(f"Decimating mesh: {len(mesh.triangles)} -> {target_triangles} triangles")
+                    mesh = mesh.simplify_quadric_decimation(target_triangles)
+            
+            # Level 4: Optional mesh subdivision for very small particles
+            elif target_triangle_size < 3:  # For very small particles, increase detail
+                # Subdivide mesh to increase triangle count and reduce hole size
+                mesh = mesh.subdivide_midpoint(number_of_iterations=1)
+                
+        else:
+            # Use default smoothing
+            mesh = mesh.filter_smooth_taubin(number_of_iterations=self.taubin_iterations)
         
         # Compute vertex normals
         mesh.compute_vertex_normals()
@@ -111,265 +208,42 @@ class MeshGeodesicSampler:
         
         return mesh
     
-    def geodesic_farthest_point_sampling(self, 
-                                       vertices: np.ndarray, 
-                                       faces: np.ndarray,
-                                       radius: float,
-                                       upper_limit: int = 100000000) -> np.ndarray:
+    def _process_mask_to_mesh(self, 
+                             mask: np.ndarray, 
+                             spacing: Tuple[float, float, float] = None) -> Tuple[o3d.geometry.TriangleMesh, np.ndarray]:
         """
-        [DEPRECATED] Perform geodesic farthest point sampling on mesh.
-        
-        This method is too slow for large datasets (671x671x350).
-        Replaced by fast_voxel_based_sampling for better performance.
+        Unified mesh processing logic.
         
         Args:
-            vertices: Mesh vertices (N, 3)
-            faces: Mesh faces (M, 3), each face is a tuple of 3 vertex indices
-            radius: Minimum geodesic distance between samples
+            mask: Binary membrane mask (0/1)
+            spacing: Voxel spacing (x, y, z)
             
         Returns:
-            Array of vertex indices for sampled points
+            Tuple of (mesh, phi) where:
+            - mesh: Open3D triangle mesh
+            - phi: Signed distance field
         """
-        # This method is commented out due to performance issues with large datasets
-        # Use fast_voxel_based_sampling instead for 671x671x350 level data
-        raise NotImplementedError(
-            "Geodesic sampling is too slow for large datasets. "
-            "Use fast_voxel_based_sampling instead."
-        )
-        
-        # # Build mesh edge graph once (used if gdist is unavailable)
-        # def _build_mesh_graph(verts: np.ndarray, tris: np.ndarray) -> csr_matrix:
-        #     i_list = []
-        #     j_list = []
-        #     w_list = []
-        #     # Each triangle contributes three undirected edges
-        #     for f in tris:
-        #         a, b, c = int(f[0]), int(f[1]), int(f[2])
-        #         for u, v in ((a, b), (b, c), (c, a)):
-        #             if u == v:
-        #                 continue
-        #             duv = np.linalg.norm(verts[u] - verts[v])
-        #             i_list.extend([u, v])
-        #             j_list.extend([v, u])
-        #             w_list.extend([duv, duv])
-        #     n = len(verts)
-        #     graph = coo_matrix((w_list, (i_list, j_list)), shape=(n, n))
-        #     return graph.tocsr()
-
-        # # Try to use gdist if available (fast and accurate). Otherwise fall back to graph shortest paths.
-        # try:
-        #     import gdist  # type: ignore
-        #     use_gdist = True
-        # except Exception:
-        #     use_gdist = False
-        #     graph_csr = _build_mesh_graph(vertices, faces)
-        
-        # picked = []
-        # n_vertices = len(vertices)
-        
-        # # Start with vertex closest to centroid
-        # centroid = vertices.mean(0)
-        # start_idx = np.argmin(np.linalg.norm(vertices - centroid, axis=1))
-        # picked.append(start_idx)
-        
-        # # Maintain minimum geodesic distance to picked set
-        # dmin = np.full(n_vertices, np.inf)
-        
-        # for _ in range(upper_limit):  # Upper limit, will break early
-        #     # Compute geodesic distances from latest seed point
-        #     if use_gdist:
-        #         d = gdist.compute_gdist(
-        #             vertices.astype(np.float64), 
-        #             faces, 
-        #             np.array([picked[-1]], dtype=np.int32)
-        #         )
-        #     else:
-        #         # Single-source shortest paths on the edge-weighted mesh graph
-        #         d = dijkstra(graph_csr, directed=False, indices=picked[-1])
-        #     dmin = np.minimum(dmin, d)
-            
-        #     # Select vertex with maximum minimum distance
-        #     next_idx = int(np.argmax(dmin))
-            
-        #     if dmin[next_idx] < radius:
-        #         # All vertices are within radius of picked set
-        #         break
-                
-        #     picked.append(next_idx)
-            
-        # return np.array(picked, dtype=int)
+        phi = self.create_signed_distance_field(mask)
+        mesh = self.extract_mesh_from_sdf(phi, spacing)
+        return mesh, phi
     
-    # def fast_voxel_based_sampling(self, 
-    #                             mask: np.ndarray,
-    #                             min_distance: float = 20.0,
-    #                             target_samples: int = 100000) -> Tuple[np.ndarray, np.ndarray]:
-    #     """
-    #     Fast voxel-based sampling for large datasets (671x671x350).
-    #     
-    #     This method uses a multi-scale approach:
-    #     1. Extract surface voxels from mask
-    #     2. Use spatial hashing for fast distance queries
-    #     3. Progressive sampling with grid-based rejection
-    #     
-    #     Args:
-    #         mask: Binary mask (0/1) indicating membrane regions
-    #         min_distance: Minimum distance between samples (in voxels)
-    #         target_samples: Target number of samples to generate
-    #         
-    #     Returns:
-    #         Tuple of (centers, normals) where:
-    #         - centers: Sampled point coordinates (K, 3)
-    #         - normals: Corresponding surface normals (K, 3)
-    #     """
-    #     print(f"Starting fast voxel-based sampling for {mask.shape} mask...")
-    #     
-    #     # Step 1: Extract surface voxels efficiently
-    #     surface_voxels = self._extract_surface_voxels_fast(mask)
-    #     if len(surface_voxels) == 0:
-    #         return np.array([]), np.array([])
-    #     
-    #     print(f"Found {len(surface_voxels)} surface voxels")
-    #     
-    #     # Step 2: Compute surface normals using gradient
-    #     normals = self._compute_surface_normals_fast(mask, surface_voxels)
-    #     
-    #     # Step 3: Fast spatial sampling with grid-based rejection
-    #     centers, normals = self._fast_spatial_sampling(
-    #         surface_voxels, normals, min_distance, target_samples
-    #     )
-    #     
-    #     print(f"Generated {len(centers)} samples")
-    #     return centers, normals
-    
-    # def _extract_surface_voxels_fast(self, mask: np.ndarray) -> np.ndarray:
-    #     """
-    #     Fast extraction of surface voxels using morphological operations.
-    #     """
-    #     # Use 6-connectivity structure for 3D erosion
-    #     structure = np.array([
-    #         [[0, 0, 0],
-    #          [0, 1, 0],
-    #          [0, 0, 0]],
-    #         [[0, 1, 0],
-    #          [1, 1, 1],
-    #          [0, 1, 0]],
-    #         [[0, 0, 0],
-    #          [0, 1, 0],
-    #          [0, 0, 0]],
-    #     ], dtype=bool)
-    #     
-    #     # Erode and subtract to get boundary
-    #     eroded = binary_erosion(mask.astype(bool), structure=structure)
-    #     surface_mask = mask.astype(bool) & (~eroded)
-    #     
-    #     # Get coordinates of surface voxels
-    #     surface_coords = np.argwhere(surface_mask)
-    #     return surface_coords.astype(np.float32)
-    
-    # def _compute_surface_normals_fast(self, mask: np.ndarray, surface_voxels: np.ndarray) -> np.ndarray:
-    #     """
-    #     Fast computation of surface normals using finite differences.
-    #     """
-    #     # Compute gradients using finite differences
-    #     grad_z, grad_y, grad_x = np.gradient(mask.astype(np.float32))
-    #     
-    #     # Sample gradients at surface voxel locations
-    #     z_coords = np.clip(surface_voxels[:, 0].astype(int), 0, mask.shape[0]-1)
-    #     y_coords = np.clip(surface_voxels[:, 1].astype(int), 0, mask.shape[1]-1)
-    #     x_coords = np.clip(surface_voxels[:, 2].astype(int), 0, mask.shape[2]-1)
-    #     
-    #     # Get gradients at surface points
-    #     gx = grad_x[z_coords, y_coords, x_coords]
-    #     gy = grad_y[z_coords, y_coords, x_coords]
-    #     gz = grad_z[z_coords, y_coords, x_coords]
-    #     
-    #     # Stack and normalize
-    #     normals = np.column_stack([gx, gy, gz])
-    #     norms = np.linalg.norm(normals, axis=1, keepdims=True)
-    #     norms[norms == 0] = 1.0  # Avoid division by zero
-    #     normals = normals / norms
-    #     
-    #     return normals
-    
-    # def _fast_spatial_sampling(self, 
-    #                          surface_voxels: np.ndarray, 
-    #                          normals: np.ndarray,
-    #                          min_distance: float,
-    #                          target_samples: int) -> Tuple[np.ndarray, np.ndarray]:
-    #     """
-    #     Fast spatial sampling using grid-based rejection.
-    #     """
-    #     if len(surface_voxels) == 0:
-    #         return np.array([]), np.array([])
-    #     
-    #     # Create spatial hash grid for fast distance queries
-    #     grid_size = max(1, int(min_distance))
-    #     grid = {}
-    #     
-    #     def _get_grid_key(pos):
-    #         return tuple((pos / grid_size).astype(int))
-    #     
-    #     def _is_valid_sample(pos, grid, min_dist):
-    #         """Check if position is valid (not too close to existing samples)"""
-    #         key = _get_grid_key(pos)
-    #         # Check neighboring grid cells
-    #         for dz in [-1, 0, 1]:
-    #             for dy in [-1, 0, 1]:
-    #                 for dx in [-1, 0, 1]:
-    #                     neighbor_key = (key[0] + dz, key[1] + dy, key[2] + dx)
-    #                     if neighbor_key in grid:
-    #                         for existing_pos in grid[neighbor_key]:
-    #                             if np.linalg.norm(pos - existing_pos) < min_dist:
-    #                                 return False
-    #         return True
-    #     
-    #     # Progressive sampling
-    #     selected_centers = []
-    #     selected_normals = []
-    #     
-    #     # Shuffle surface voxels for random sampling
-    #     indices = np.random.permutation(len(surface_voxels))
-    #     
-    #     for idx in indices:
-    #         if len(selected_centers) >= target_samples:
-    #             break
-    #             
-    #         pos = surface_voxels[idx]
-    #         
-    #         if _is_valid_sample(pos, grid, min_distance):
-    #             selected_centers.append(pos)
-    #             selected_normals.append(normals[idx])
-    #             
-    #             # Add to spatial grid
-    #             key = _get_grid_key(pos)
-    #             if key not in grid:
-    #                 grid[key] = []
-    #             grid[key].append(pos)
-    #     
-    #     return np.array(selected_centers), np.array(selected_normals)
-    
-    def sample_mesh_faces_with_sdf_normals(self, 
-                                         mesh: o3d.geometry.TriangleMesh,
-                                         phi: np.ndarray,
-                                         min_distance: float = 20.0) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_face_centers_and_normals(self, 
+                                        mesh: o3d.geometry.TriangleMesh,
+                                        phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Sample mesh faces and compute normals aligned with SDF gradient direction.
-        
-        This method samples faces from the mesh and computes normals that are
-        aligned with the SDF gradient direction (pointing towards positive phi values).
+        Compute face centers and normals aligned with SDF gradient.
         
         Args:
             mesh: Open3D triangle mesh
             phi: Signed distance field
-            min_distance: Minimum distance between sampled faces
             
         Returns:
-            Tuple of (centers, normals) where:
-            - centers: Face center coordinates (K, 3)
-            - normals: Face normals aligned with SDF gradient (K, 3)
+            Tuple of (face_centers, face_normals) where:
+            - face_centers: Face center coordinates (N_faces, 3)
+            - face_normals: Face normals aligned with SDF gradient (N_faces, 3)
         """
         if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
-            return np.array([]), np.array([])
+            return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
         
         # Get mesh data
         vertices = np.asarray(mesh.vertices)
@@ -397,6 +271,53 @@ class MeshGeodesicSampler:
         aligned_normals = self._align_normals_with_sdf_gradient(
             face_centers, face_normals, phi
         )
+        
+        return face_centers, aligned_normals
+    
+    def get_triangle_centers_and_normals(self, 
+                                       mesh: o3d.geometry.TriangleMesh,
+                                       phi: np.ndarray) -> np.ndarray:
+        """
+        Get all triangle centers and their normals aligned with SDF gradient.
+        
+        Args:
+            mesh: Open3D triangle mesh
+            phi: Signed distance field
+            
+        Returns:
+            N*6 array where each row is [x, y, z, nx, ny, nz]
+        """
+        face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh, phi)
+        
+        # Combine centers and normals into N*6 array
+        result = np.column_stack([face_centers, aligned_normals])
+        
+        return result
+    
+    
+    
+    def sample_mesh_faces_with_sdf_normals(self, 
+                                         mesh: o3d.geometry.TriangleMesh,
+                                         phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Sample mesh faces and compute normals aligned with SDF gradient direction.
+        
+        This method samples faces from the mesh and computes normals that are
+        aligned with the SDF gradient direction (pointing towards positive phi values).
+        
+        Args:
+            mesh: Open3D triangle mesh
+            phi: Signed distance field
+            
+        Returns:
+            Tuple of (centers, normals) where:
+            - centers: Face center coordinates (K, 3)
+            - normals: Face normals aligned with SDF gradient (K, 3)
+        """
+        face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh, phi)
+        
+        # Get sampling distance based on expected_particle_size
+        min_distance = self._get_sampling_distance()
         
         # Sample faces with minimum distance constraint
         sampled_centers, sampled_normals = self._sample_faces_with_distance_constraint(
@@ -578,21 +499,16 @@ class MeshGeodesicSampler:
     def sample_membrane_points(self, 
                              mask: np.ndarray,
                              particle_radius: float = 10.0,
-                             volume_shape: Optional[Tuple[int, int, int]] = None,
-                             use_fast_sampling: bool = False,  # Disabled by default
-                             target_samples: int = 100000) -> Tuple[np.ndarray, np.ndarray]:
+                             volume_shape: Optional[Tuple[int, int, int]] = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Main method to sample points on membrane surface using mesh face sampling.
         
-        This method now uses mesh face sampling with SDF-aligned normals instead
-        of the deprecated fast voxel-based sampling.
+        This method uses mesh face sampling with SDF-aligned normals.
         
         Args:
             mask: Binary membrane mask (0/1)
             particle_radius: Effective particle radius for boundary checking
             volume_shape: Volume dimensions for boundary checking
-            use_fast_sampling: DEPRECATED - no longer used
-            target_samples: DEPRECATED - no longer used
             
         Returns:
             Tuple of (centers, normals) where:
@@ -604,20 +520,16 @@ class MeshGeodesicSampler:
         
         print("Using mesh face sampling with SDF-aligned normals...")
         
-        # Step 1: Create signed distance field
-        phi = self.create_signed_distance_field(mask)
+        # Process mask to mesh
+        mesh, phi = self._process_mask_to_mesh(mask)
         
-        # Step 2: Extract mesh from SDF
-        mesh = self.extract_mesh_from_sdf(phi)
+        # Sample mesh faces with SDF-aligned normals
+        centers, normals = self.sample_mesh_faces_with_sdf_normals(mesh, phi)
         
-        # Step 3: Sample mesh faces with SDF-aligned normals
-        centers, normals = self.sample_mesh_faces_with_sdf_normals(
-            mesh, phi, self.min_distance
-        )
-        
-        # Step 4: Apply non-maximum suppression
+        # Apply non-maximum suppression
+        min_distance = self._get_sampling_distance()
         centers, normals = self.apply_non_maximum_suppression(
-            centers, normals, self.min_distance
+            centers, normals, min_distance
         )
         
         # Step 5: Check placement feasibility
@@ -626,6 +538,36 @@ class MeshGeodesicSampler:
         )
         
         return centers, normals
+    
+    def get_all_triangle_centers_and_normals(self, 
+                                           mask: np.ndarray,
+                                           spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> np.ndarray:
+        """
+        Get all triangle centers and normals from mesh without sampling.
+        
+        This method extracts all triangle centers and their SDF-aligned normals,
+        providing the raw mesh data for particle placement.
+        
+        Note: This method does not use min_distance as it extracts ALL triangles
+        without distance-based sampling.
+        
+        Args:
+            mask: Binary membrane mask (0/1)
+            spacing: Voxel spacing (x, y, z)
+            
+        Returns:
+            N*6 array where each row is [x, y, z, nx, ny, nz]
+        """
+        print("Extracting all triangle centers and normals...")
+        
+        # Process mask to mesh
+        mesh, phi = self._process_mask_to_mesh(mask, spacing)
+        
+        # Get all triangle centers and normals (no sampling applied)
+        triangle_data = self.get_triangle_centers_and_normals(mesh, phi)
+        
+        print(f"Extracted {len(triangle_data)} triangle centers")
+        return triangle_data
 
     # ---------------------------
     # Surface and normal helpers
@@ -753,16 +695,18 @@ class MeshGeodesicSampler:
         return vol
 
 
-def create_mesh_geodesic_sampler(min_distance: float = 20.0,
-                                smoothing_sigma: float = 1.5,
-                                taubin_iterations: int = 10) -> MeshGeodesicSampler:
+def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
+                                taubin_iterations: int = 10,
+                                expected_particle_size: Optional[float] = None,
+                                random_seed: Optional[int] = None) -> MeshGeodesicSampler:
     """
     Factory function to create a MeshGeodesicSampler instance.
     
     Args:
-        min_distance: Minimum distance between sampling points (in voxels)
         smoothing_sigma: Gaussian smoothing parameter (in voxels)
         taubin_iterations: Number of Taubin smoothing iterations
+        expected_particle_size: Expected particle size in pixels for mesh density control
+        random_seed: Random seed for mesh generation (None for deterministic)
         
     Returns:
         Configured MeshGeodesicSampler instance
@@ -770,7 +714,8 @@ def create_mesh_geodesic_sampler(min_distance: float = 20.0,
     return MeshGeodesicSampler(
         smoothing_sigma=smoothing_sigma,
         taubin_iterations=taubin_iterations,
-        min_distance=min_distance
+        expected_particle_size=expected_particle_size,
+        random_seed=random_seed
     )
 
 
@@ -803,28 +748,26 @@ def generate_synthetic_mask(
 def run_mesh_geodesic_sampling(
     mask: np.ndarray,
     *, # '*' is used to indicate that the following parameters are keyword-only
-    min_distance: float = 20.0,
     smoothing_sigma: float = 1.5,
     taubin_iterations: int = 10,
     particle_radius: float = 10.0,
     volume_shape: Optional[Tuple[int, int, int]] = None,
-    use_fast_sampling: bool = False,  # DEPRECATED - no longer used
-    target_samples: int = 100000,    # DEPRECATED - no longer used
+    expected_particle_size: Optional[float] = None,
+    random_seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     One-shot convenience wrapper to run mesh-geodesic sampling on a mask.
     
-    Now uses mesh face sampling with SDF-aligned normals for all datasets.
+    Uses mesh face sampling with SDF-aligned normals for all datasets.
     
     Args:
         mask: Binary membrane mask (0/1)
-        min_distance: Minimum distance between samples (in voxels)
         smoothing_sigma: Gaussian smoothing parameter (in voxels)
         taubin_iterations: Number of Taubin smoothing iterations
         particle_radius: Effective particle radius for boundary checking
         volume_shape: Volume dimensions for boundary checking
-        use_fast_sampling: DEPRECATED - no longer used
-        target_samples: DEPRECATED - no longer used
+        expected_particle_size: Expected particle size in pixels for mesh density control
+        random_seed: Random seed for mesh generation (None for deterministic)
     
     Returns:
         Tuple of (centers, normals) where:
@@ -832,18 +775,55 @@ def run_mesh_geodesic_sampling(
         - normals: Corresponding surface normals aligned with SDF gradient (K, 3)
     """
     sampler = create_mesh_geodesic_sampler(
-        min_distance=min_distance,
         smoothing_sigma=smoothing_sigma,
         taubin_iterations=taubin_iterations,
+        expected_particle_size=expected_particle_size,
+        random_seed=random_seed
     )
     centers, normals = sampler.sample_membrane_points(
         mask,
         particle_radius=particle_radius,
         volume_shape=volume_shape,
-        use_fast_sampling=use_fast_sampling,
-        target_samples=target_samples,
     )
     return centers, normals
+
+
+def get_triangle_centers_and_normals(
+    mask: np.ndarray,
+    *,
+    expected_particle_size: Optional[float] = None,
+    smoothing_sigma: float = 1.5,
+    taubin_iterations: int = 10,
+    spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    random_seed: Optional[int] = None
+) -> np.ndarray:
+    """
+    One-shot convenience function to get all triangle centers and normals.
+    
+    This function extracts ALL triangle centers and normals from the mesh,
+    without applying distance-based sampling. The mesh density is controlled
+    by expected_particle_size parameter.
+    
+    Args:
+        mask: Binary membrane mask (0/1)
+        expected_particle_size: Expected particle size in pixels for mesh density control
+        smoothing_sigma: Gaussian smoothing parameter (in voxels)
+        taubin_iterations: Number of Taubin smoothing iterations (used if expected_particle_size is None)
+        spacing: Voxel spacing (x, y, z)
+        random_seed: Random seed for mesh generation (None for deterministic)
+    
+    Returns:
+        N*6 array where each row is [x, y, z, nx, ny, nz]
+    """
+    sampler = create_mesh_geodesic_sampler(
+        smoothing_sigma=smoothing_sigma,
+        taubin_iterations=taubin_iterations,
+        expected_particle_size=expected_particle_size,
+        random_seed=random_seed
+    )
+    
+    triangle_data = sampler.get_all_triangle_centers_and_normals(mask, spacing)
+    return triangle_data
 
 
 def save_sampling_outputs(
@@ -858,21 +838,20 @@ def save_sampling_outputs(
     sigma_psi: float = 30.0,
     sigma_rot: float = 30.0,
     create_vis_script: bool = False,
-    use_subtomogram_format: bool = True,
+    use_simplified_relion: bool = True,
 ) -> Tuple[Path, Path, Path, Optional[Path]]:
     """
     Save standard outputs produced by sampling.
     
     Files:
       - sampling_coordinates.csv (centers + normals)
-      - particles.star (RELION 5 subtomogram STAR format)
+      - particles.star (Simplified RELION STAR format)
       - coordinates.csv (x,y,z + tilt,psi,rot)
       - prior_angles.csv (RELION priors)
       - visualize_results.py (optional viewer script)
     
     Args:
-        use_subtomogram_format: If True, use RELION 5 subtomogram format
-                                with proper header and column order
+        use_simplified_relion: If True, use simplified RELION format with minimal columns
     
     Returns tuple of generated file paths.
     """
@@ -887,12 +866,10 @@ def save_sampling_outputs(
     )
     df_coords.to_csv(coord_csv, index=False)
 
-    # 2) RELION STAR with subtomogram format
+    # 2) Simplified RELION STAR format (like voxel_sample.py)
     star_file = out_dir / "particles.star"
-    if use_subtomogram_format:
-        # Use RELION 5 subtomogram format
-        from tomopanda.utils.mrc_utils import save_subtomogram_coordinates
-        save_subtomogram_coordinates(
+    if use_simplified_relion:
+        _save_simplified_relion_star(
             centers,
             normals,
             star_file,
@@ -937,6 +914,86 @@ def save_sampling_outputs(
         create_visualization_script(vis_script_path, centers, normals)
 
     return coord_csv, star_file, coordinates_file, vis_script_path
+
+
+def _save_simplified_relion_star(
+    centers: np.ndarray,
+    normals: np.ndarray,
+    output_path: Union[str, Path],
+    *,
+    tomogram_name: str = "tomogram",
+    particle_diameter: float = 200.0,
+    voxel_size: Optional[Tuple[float, float, float]] = None,
+) -> None:
+    """
+    Save simplified RELION STAR file with minimal columns (like voxel_sample.py).
+    
+    Only includes essential columns for particle picking:
+    - rlnCoordinateX/Y/Z: particle coordinates
+    - rlnAngleTilt/Psi/Rot: particle orientations
+    - rlnTomoName: tomogram name
+    - rlnTomoParticleId: particle ID
+    - rlnTomoParticleDiameter: particle diameter
+    
+    Args:
+        centers: Sample centers (K, 3)
+        normals: Sample normals (K, 3)
+        output_path: Output STAR file path
+        tomogram_name: Name of the tomogram
+        particle_diameter: Particle diameter in Angstroms
+        voxel_size: Optional voxel size for coordinate scaling
+    """
+    if len(centers) == 0:
+        raise ValueError("No coordinates to save")
+    
+    # Scale coordinates if voxel size is provided
+    if voxel_size is not None:
+        centers_scaled = centers * np.array(voxel_size)
+    else:
+        centers_scaled = centers
+    
+    # Convert membrane normals to Euler angles
+    from tomopanda.utils.relion_utils import RELIONConverter
+    euler_angles = []
+    for normal in normals:
+        tilt, psi, rot = RELIONConverter.normal_to_euler(normal)
+        euler_angles.append([tilt, psi, rot])
+    
+    euler_angles = np.array(euler_angles)
+    
+    # Create simplified STAR file data (minimal columns only)
+    data = {
+        'rlnCoordinateX': centers_scaled[:, 0],
+        'rlnCoordinateY': centers_scaled[:, 1], 
+        'rlnCoordinateZ': centers_scaled[:, 2],
+        'rlnAngleTilt': euler_angles[:, 0],
+        'rlnAnglePsi': euler_angles[:, 1],
+        'rlnAngleRot': euler_angles[:, 2],
+        'rlnTomoName': [tomogram_name] * len(centers),
+        'rlnTomoParticleId': range(len(centers)),
+        'rlnTomoParticleDiameter': [particle_diameter] * len(centers)
+    }
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    # Write STAR file
+    output_path = Path(output_path)
+    with open(output_path, 'w') as f:
+        # Write header
+        f.write("data_\n\n")
+        f.write("loop_\n")
+        
+        # Write column labels
+        for col in df.columns:
+            f.write(f"_{col}\n")
+        
+        # Write data
+        for _, row in df.iterrows():
+            f.write(" ".join([f"{val:.6f}" if isinstance(val, float) else str(val) 
+                            for val in row.values]) + "\n")
+    
+    print(f"Saved {len(centers)} particles to simplified RELION STAR file: {output_path}")
 
 
 def create_visualization_script(

@@ -1,42 +1,42 @@
 # TomoPANDA
 
-基于SE(3)等变变换器的CryoET膜蛋白检测工具
+CryoET membrane protein detection tool based on SE(3) equivariant transformer
 
-## 简介
+## Introduction
 
-TomoPANDA是一个专门用于cryoET（冷冻电子断层扫描）膜蛋白检测的工具包。它采用SE(3)等变变换器架构，能够有效处理3D断层扫描数据中的膜蛋白识别和定位任务。
+TomoPANDA is a toolkit specifically designed for membrane protein detection in cryoET (cryo-electron tomography). It employs SE(3) equivariant transformer architecture to effectively handle membrane protein recognition and localization tasks in 3D tomographic data.
 
-## 主要特性
+## Key Features
 
-- **SE(3)等变变换器**: 基于几何深度学习的先进架构
-- **膜蛋白检测**: 专门针对膜蛋白的检测和定位算法
-- **网格测地采样**: 基于测地距离的膜蛋白采样算法
-- **多格式支持**: 支持MRC、RELION等标准格式
-- **命令行接口**: 简单易用的CLI工具
-- **模块化设计**: 高度模块化的代码架构
+- **SE(3) Equivariant Transformer**: Advanced architecture based on geometric deep learning
+- **Membrane Protein Detection**: Specialized detection and localization algorithms for membrane proteins
+- **Mesh Geodesic Sampling**: Membrane protein sampling algorithm based on geodesic distance
+- **Multi-format Support**: Supports standard formats like MRC, RELION
+- **Command Line Interface**: Simple and easy-to-use CLI tools
+- **Modular Design**: Highly modular code architecture
 
-## 安装
+## Installation
 
-### 依赖安装
+### Dependency Installation
 
 ```bash
-# 安装基础依赖
+# Install basic dependencies
 
-# 创建虚拟环境
+# Create virtual environment
 python -m venv tomopanda
 
-# 激活虚拟环境
+# Activate virtual environment
 # Windows
 tomopanda\Scripts\activate
 # Linux/Mac
 source tomopanda/bin/activate
 
-# 安装依赖
+# Install dependencies
 pip install -r requirements.txt
 
 ```
 
-### 开发安装
+### Development Installation
 
 ```bash
 git clone https://github.com/your-org/TomoPANDA.git
@@ -44,75 +44,82 @@ cd TomoPANDA
 pip install -e .
 ```
 
-## 快速开始
+## Quick Start
 
-### 基本使用
+### Basic Usage
 
 ```bash
-# 查看所有可用命令
+# View all available commands
 tomopanda --help
 
-# 使用mesh geodesic采样进行粒子挑选
+# Use mesh geodesic sampling for particle picking
 tomopanda sample mesh-geodesic --create-synthetic --output results/
 
-# 使用真实膜掩码进行采样
+# Use real membrane mask for sampling
 tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
 
-# 使用voxel表面采样并导出RELION 5 STAR
+# Use voxel surface sampling and export RELION 5 STAR
 tomopanda sample voxel-sample --create-synthetic --output voxel_results/
 tomopanda sample voxel-sample --mask membrane_mask.mrc --min-distance 20 --edge-distance 10 --output voxel_results/
 ```
 
-### Python API使用
+### Python API Usage
 
 ```python
 from tomopanda.core.mesh_geodesic import create_mesh_geodesic_sampler
 from tomopanda.utils.mrc_utils import load_membrane_mask
 from tomopanda.utils.relion_utils import convert_to_relion_star
 
-# 创建采样器
-sampler = create_mesh_geodesic_sampler(min_distance=20.0)
+# Create sampler
+sampler = create_mesh_geodesic_sampler(expected_particle_size=20.0)
 
-# 加载膜掩码
+# Load membrane mask
 mask = load_membrane_mask("membrane_mask.mrc")
 
-# 执行采样
+# Execute sampling
 centers, normals = sampler.sample_membrane_points(mask, particle_radius=10.0)
 
-# 保存为RELION格式
+# Save as RELION format
 convert_to_relion_star(centers, normals, "particles.star")
 ```
 
-## 命令行接口
+## Command Line Interface
 
-### Sample命令 - 粒子采样
+### Sample Command - Particle Sampling
 
 ```bash
-# 基本用法
+# Basic usage
 tomopanda sample mesh-geodesic [OPTIONS]
 
-# 使用合成数据测试
+# Test with synthetic data
 tomopanda sample mesh-geodesic --create-synthetic --output results/
 
-# 使用真实膜掩码
+# Use real membrane mask
 tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
 
-# 自定义参数
+# Custom parameters (using expected particle size - taubin iterations will be auto-calculated)
 tomopanda sample mesh-geodesic \
     --mask membrane_mask.mrc \
     --output results/ \
-    --min-distance 25.0 \
-    --particle-radius 12.0 \
+    --expected-particle-size 25.0 \
     --smoothing-sigma 2.0 \
     --verbose
 
-# Voxel表面采样
+# Alternative: use manual taubin iterations (without expected particle size)
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --smoothing-sigma 2.0 \
+    --taubin-iterations 15 \
+    --verbose
+
+# Voxel surface sampling
 tomopanda sample voxel-sample [OPTIONS]
 
-# 使用合成数据测试
+# Test with synthetic data
 tomopanda sample voxel-sample --create-synthetic --output voxel_results/
 
-# 使用真实膜掩码
+# Use real membrane mask
 tomopanda sample voxel-sample \
     --mask membrane_mask.mrc \
     --output voxel_results/ \
@@ -121,103 +128,105 @@ tomopanda sample voxel-sample \
     --verbose
 ```
 
-### 其他命令
+### Other Commands
 
 ```bash
-# 粒子检测
+# Particle detection
 tomopanda detect --tomogram tomogram.mrc --output detections/
 
-# 模型训练
+# Model training
 tomopanda train --config config.yaml --data data/
 
-# 可视化
+# Visualization
 tomopanda visualize --input results/ --output plots/
 
-# 数据分析
+# Data analysis
 tomopanda analyze --input results/ --output analysis/
 
-# 配置管理
+# Configuration management
 tomopanda config --show
 tomopanda config --set parameter=value
 
-# 版本信息
+# Version information
 tomopanda version
 ```
 
-## 项目结构
+## Project Structure
 
 ```
 tomopanda/
-├── cli/                        # 命令行接口
-│   ├── commands/              # 命令模块
-│   │   ├── sample.py          # 采样命令
-│   │   ├── detect.py          # 检测命令
-│   │   ├── train.py           # 训练命令
+├── cli/                        # Command line interface
+│   ├── commands/              # Command modules
+│   │   ├── sample.py          # Sampling command
+│   │   ├── detect.py          # Detection command
+│   │   ├── train.py           # Training command
 │   │   └── ...
-│   └── main.py                # CLI主入口
-├── core/                       # 核心算法
-│   ├── mesh_geodesic.py       # 网格测地采样
-│   ├── se3_transformer.py     # SE(3)变换器
+│   └── main.py                # CLI main entry point
+├── core/                       # Core algorithms
+│   ├── mesh_geodesic.py       # Mesh geodesic sampling
+│   ├── se3_transformer.py     # SE(3) transformer
 │   └── ...
-├── utils/                      # 工具模块
-│   ├── mrc_utils.py           # MRC文件处理
-│   ├── relion_utils.py        # RELION格式转换
+├── utils/                      # Utility modules
+│   ├── mrc_utils.py           # MRC file processing
+│   ├── relion_utils.py        # RELION format conversion
 │   └── ...
-├── examples/                   # 使用示例
+├── examples/                   # Usage examples
 │   └── mesh_geodesic_example.py
-└── doc/                        # 文档
+└── doc/                        # Documentation
     └── mesh_geodesic_algorithm.md
 ```
 
-## 核心算法
+## Core Algorithms
 
-### Mesh Geodesic采样
+### Mesh Geodesic Sampling
 
-Mesh geodesic采样是一种基于网格测地距离的膜蛋白采样算法：
+Mesh geodesic sampling is a membrane protein sampling algorithm based on mesh geodesic distance:
 
-1. **签名距离场**: 从二值膜掩码创建SDF
-2. **网格提取**: 使用Marching Cubes提取三角网格
-3. **测地采样**: 基于测地距离的均匀采样
-4. **后处理**: NMS和边界检查
+1. **Signed Distance Field**: Create SDF from binary membrane mask
+2. **Mesh Extraction**: Extract triangular mesh using Marching Cubes
+3. **Geodesic Sampling**: Uniform sampling based on geodesic distance
+4. **Post-processing**: NMS and boundary checking
 
-详细算法说明请参考 [mesh_geodesic_algorithm.md](tomopanda/doc/mesh_geodesic_algorithm.md)
+For detailed algorithm description, please refer to [mesh_geodesic_algorithm.md](tomopanda/doc/mesh_geodesic_algorithm.md)
 
-## 输出格式
+## Output Formats
 
-- **CSV坐标文件**: 包含x,y,z坐标和nx,ny,nz法向量
-- **RELION STAR文件**: 标准RELION格式，包含粒子坐标和欧拉角
-- **先验角度文件**: 用于3D分类的角度先验
+- **CSV Coordinate File**: Contains x,y,z coordinates and nx,ny,nz normal vectors
+- **RELION STAR File**: Standard RELION format with particle coordinates and Euler angles
+- **Prior Angles File**: Angle priors for 3D classification
 
-## 参数说明
+## Parameter Description
 
-### Mesh Geodesic采样参数
+### Mesh Geodesic Sampling Parameters
 
-- `--min-distance`: 采样点间最小距离（像素）
-- `--particle-radius`: 粒子半径，用于边界检查
-- `--smoothing-sigma`: 高斯平滑参数
-- `--taubin-iterations`: Taubin平滑迭代次数
+- `--smoothing-sigma`: Gaussian smoothing parameter (default: 1.5)
+- `--taubin-iterations`: Number of Taubin smoothing iterations (default: 10) - **mutually exclusive with --expected-particle-size**
+- `--expected-particle-size`: Expected particle size in pixels for mesh density control - **automatically calculates taubin iterations** (mutually exclusive with --taubin-iterations)
+- `--random-seed`: Random seed for mesh generation (None for deterministic)
 
-### 输出参数
+**Note**: `--expected-particle-size` and `--taubin-iterations` are mutually exclusive. When `--expected-particle-size` is specified, taubin iterations are automatically calculated as `max(5, min(30, int(expected_particle_size / 5)))`.
 
-- `--tomogram-name`: 断层扫描名称
-- `--particle-diameter`: 粒子直径（埃）
-- `--confidence`: 置信度分数
+### Output Parameters
 
-### Voxel表面采样参数
+- `--tomogram-name`: Tomogram name
+- `--particle-diameter`: Particle diameter (Angstroms)
+- `--confidence`: Confidence score
 
-- `--min-distance`: 采样点间最小欧氏距离（像素）
-- `--edge-distance`: 与体素边界的最小距离（像素），避免半颗粒
-- `--voxel-size`: 体素尺寸 (X,Y,Z)（埃），用于将坐标缩放到物理单位
+### Voxel Surface Sampling Parameters
 
-## 性能优化
+- `--min-distance`: Minimum Euclidean distance between sampling points (pixels)
+- `--edge-distance`: Minimum distance from voxel boundary (pixels) to avoid half-particles
+- `--voxel-size`: Voxel size (X,Y,Z) (Angstroms) for scaling coordinates to physical units
 
-1. 对于大型数据集，考虑使用并行处理
-2. 调整`min_distance`参数平衡采样密度和计算时间
-3. 使用合适的`particle_radius`避免边界冲突
+## Performance Optimization
 
-## 故障排除
+1. For large datasets, consider using parallel processing
+2. Adjust `min_distance` parameter to balance sampling density and computation time
+3. Use appropriate `particle_radius` to avoid boundary conflicts
 
-### 常见问题
+## Troubleshooting
+
+### Common Issues
 
 1. **ImportError: No module named 'gdist'**
    ```bash
@@ -229,19 +238,19 @@ Mesh geodesic采样是一种基于网格测地距离的膜蛋白采样算法：
    pip install open3d
    ```
 
-3. **内存不足**
-   - 减小输入数据尺寸
-   - 增加`min_distance`参数
+3. **Insufficient Memory**
+   - Reduce input data size
+   - Increase `min_distance` parameter
 
-## 贡献
+## Contributing
 
-欢迎提交Issue和Pull Request来改进项目！
+Welcome to submit Issues and Pull Requests to improve the project!
 
-## 许可证
+## License
 
-本项目采用MIT许可证。
+This project is licensed under the MIT License.
 
-## 参考文献
+## References
 
 1. Lorensen, W. E., & Cline, H. E. (1987). Marching cubes: A high resolution 3D surface construction algorithm.
 2. Taubin, G. (1995). A signal processing approach to fair surface design.

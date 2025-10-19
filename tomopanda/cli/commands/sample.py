@@ -36,14 +36,18 @@ class SampleCommand(BaseCommand):
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Examples:
-  # Mesh geodesic sampling with synthetic data
+  # Extract all triangle centers with synthetic data
   tomopanda sample mesh-geodesic --create-synthetic --output results/
 
-  # Mesh geodesic sampling with real membrane mask
+  # Extract triangle centers with real membrane mask
   tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
 
-  # Custom parameters
-  tomopanda sample mesh-geodesic --mask mask.mrc --min-distance 25.0 --particle-radius 12.0
+  # Custom parameters with mesh density control
+  tomopanda sample mesh-geodesic --mask mask.mrc --expected-particle-size 20.0 --random-seed 42
+
+  # Generate different mesh variants
+  tomopanda sample mesh-geodesic --create-synthetic --random-seed 42 --output variant_1
+  tomopanda sample mesh-geodesic --create-synthetic --random-seed 123 --output variant_2
             """
         )
 
@@ -54,11 +58,11 @@ Examples:
             required=True
         )
 
-        # Mesh geodesic subcommand
+        # Mesh geodesic subcommand (triangle extraction only)
         mesh_parser = method_subparsers.add_parser(
             'mesh-geodesic',
-            help='Mesh geodesic sampling for membrane-based particle picking',
-            description='Perform mesh geodesic sampling on membrane masks to generate particle picking candidates'
+            help='Extract all triangle centers and normals from membrane mesh',
+            description='Extract all triangle centers and normals from membrane masks without distance-based sampling.'
         )
 
         self._setup_mesh_geodesic_parser(mesh_parser)
@@ -107,19 +111,11 @@ Examples:
             help='Output directory for results (default: sampling_results)'
         )
         
-        # Sampling parameters
-        parser.add_argument(
-            '--min-distance',
-            type=float,
-            default=20.0,
-            help='Minimum distance between sampling points in pixels (default: 20.0)'
-        )
-        parser.add_argument(
-            '--particle-radius',
-            type=float,
-            default=10.0,
-            help='Particle radius for boundary checking in pixels (default: 10.0)'
-        )
+        # Mode is now fixed to triangles only
+        # No mode selection needed
+        
+        # Mesh parameters (no distance-based sampling)
+        # Removed min-distance and particle-radius as they are not needed for triangle extraction
         parser.add_argument(
             '--smoothing-sigma',
             type=float,
@@ -130,7 +126,17 @@ Examples:
             '--taubin-iterations',
             type=int,
             default=10,
-            help='Number of Taubin smoothing iterations (default: 10)'
+            help='Number of Taubin smoothing iterations (default: 10). Mutually exclusive with --expected-particle-size'
+        )
+        parser.add_argument(
+            '--expected-particle-size',
+            type=float,
+            help='Expected particle size in pixels for mesh density control. Automatically calculates taubin iterations. Mutually exclusive with --taubin-iterations'
+        )
+        parser.add_argument(
+            '--random-seed',
+            type=int,
+            help='Random seed for mesh generation (None for deterministic)'
         )
         
         # Synthetic data parameters
@@ -314,6 +320,118 @@ Examples:
             action='store_true',
             help='Enable verbose output'
         )
+    
+    def _setup_triangle_centers_parser(self, parser: argparse.ArgumentParser):
+        """Setup arguments for triangle centers extraction."""
+        
+        # Input options
+        input_group = parser.add_mutually_exclusive_group(required=True)
+        input_group.add_argument(
+            '--mask',
+            type=str,
+            help='Path to membrane mask MRC file'
+        )
+        input_group.add_argument(
+            '--create-synthetic',
+            action='store_true',
+            help='Create synthetic membrane mask for testing'
+        )
+        
+        # Output options
+        parser.add_argument(
+            '--output',
+            type=str,
+            default='triangle_centers_results',
+            help='Output directory for results (default: triangle_centers_results)'
+        )
+        
+        # Mesh parameters
+        parser.add_argument(
+            '--expected-particle-size',
+            type=float,
+            help='Expected particle size in pixels for mesh density control'
+        )
+        parser.add_argument(
+            '--random-seed',
+            type=int,
+            help='Random seed for mesh generation (None for deterministic)'
+        )
+        parser.add_argument(
+            '--smoothing-sigma',
+            type=float,
+            default=1.5,
+            help='Gaussian smoothing sigma (default: 1.5)'
+        )
+        parser.add_argument(
+            '--taubin-iterations',
+            type=int,
+            default=10,
+            help='Number of Taubin smoothing iterations (default: 10)'
+        )
+        
+        # Synthetic data parameters
+        parser.add_argument(
+            '--synthetic-shape',
+            type=int,
+            nargs=3,
+            default=[100, 100, 100],
+            metavar=('Z', 'Y', 'X'),
+            help='Shape for synthetic membrane mask (default: 100 100 100)'
+        )
+        parser.add_argument(
+            '--synthetic-center',
+            type=int,
+            nargs=3,
+            default=[50, 50, 50],
+            metavar=('Z', 'Y', 'X'),
+            help='Center for synthetic membrane mask (default: 50 50 50)'
+        )
+        parser.add_argument(
+            '--synthetic-radius',
+            type=int,
+            default=30,
+            help='Radius for synthetic membrane mask (default: 30)'
+        )
+        
+        # Output format options
+        parser.add_argument(
+            '--tomogram-name',
+            type=str,
+            default='tomogram',
+            help='Name of the tomogram for RELION output (default: tomogram)'
+        )
+        parser.add_argument(
+            '--particle-diameter',
+            type=float,
+            default=200.0,
+            help='Particle diameter in Angstroms (default: 200.0)'
+        )
+        
+        # Advanced options
+        parser.add_argument(
+            '--voxel-size',
+            type=float,
+            nargs=3,
+            metavar=('X', 'Y', 'Z'),
+            help='Voxel size in Angstroms (X, Y, Z)'
+        )
+        
+        # Visualization options
+        parser.add_argument(
+            '--create-visualization',
+            action='store_true',
+            help='Create visualization script for results'
+        )
+        parser.add_argument(
+            '--save-intermediates',
+            action='store_true',
+            help='Save intermediate MRC volumes: surface mask and rasterized mesh surface'
+        )
+        parser.add_argument(
+            '--verbose',
+            action='store_true',
+            help='Enable verbose output'
+        )
 
     def _run_voxel_sample(self, args: argparse.Namespace) -> int:
         """Run voxel-based surface sampling and export to RELION 5 STAR."""
@@ -437,6 +555,7 @@ Examples:
         print(f"Total sampling points: {len(centers)}")
         print(f"Results saved to: {output_dir}")
         return 0
+    
     def _run_mesh_geodesic(self, args: argparse.Namespace) -> int:
         """Run mesh geodesic sampling."""
         
@@ -480,33 +599,43 @@ Examples:
         print(f"Membrane mask shape: {mask.shape}")
         print(f"Membrane volume fraction: {mask.sum() / mask.size:.3f}")
         
+        # Validate mutually exclusive parameters
+        if getattr(args, 'expected_particle_size', None) is not None and args.taubin_iterations != 10:
+            print("Warning: --expected-particle-size and --taubin-iterations are mutually exclusive.")
+            print("When --expected-particle-size is specified, taubin iterations are automatically calculated.")
+            print("Ignoring --taubin-iterations and using auto-calculated value.")
+        
         # Create mesh geodesic sampler
         print("\n=== Creating Mesh Geodesic Sampler ===")
         sampler = create_mesh_geodesic_sampler(
-            min_distance=args.min_distance,
             smoothing_sigma=args.smoothing_sigma,
-            taubin_iterations=args.taubin_iterations
+            taubin_iterations=args.taubin_iterations,
+            expected_particle_size=getattr(args, 'expected_particle_size', None),
+            random_seed=getattr(args, 'random_seed', None)
         )
         
         if args.verbose:
-            print(f"Sampling parameters:")
-            print(f"  - Minimum distance: {args.min_distance}")
+            print(f"Triangle extraction parameters:")
             print(f"  - Smoothing sigma: {args.smoothing_sigma}")
             print(f"  - Taubin iterations: {args.taubin_iterations}")
-            print(f"  - Particle radius: {args.particle_radius}")
+            if getattr(args, 'expected_particle_size', None) is not None:
+                print(f"  - Expected particle size: {args.expected_particle_size}")
+            if getattr(args, 'random_seed', None) is not None:
+                print(f"  - Random seed: {args.random_seed}")
         
-        # Perform mesh geodesic sampling
-        print("\n=== Performing Mesh Geodesic Sampling ===")
+        # Extract all triangle centers and normals
+        print("\n=== Extracting All Triangle Centers ===")
         try:
-            centers, normals = sampler.sample_membrane_points(
-                mask, 
-                particle_radius=args.particle_radius
-            )
-            
-            print(f"Sampling completed successfully!")
-            print(f"Number of sampling points: {len(centers)}")
+            triangle_data = sampler.get_all_triangle_centers_and_normals(mask)
+            centers = triangle_data[:, :3]  # x, y, z
+            normals = triangle_data[:, 3:]  # nx, ny, nz
+            print(f"Extracted {len(triangle_data)} triangle centers")
+        except Exception as e:
+            print(f"Error during triangle extraction: {str(e)}")
             if args.verbose:
-                print("Euler angles are derived from normals (tilt, psi, rot=0) per RELION convention.")
+                import traceback
+                traceback.print_exc()
+            return 1
 
             # Save intermediates if requested
             if args.save_intermediates:
@@ -552,12 +681,14 @@ Examples:
             self._save_coordinates_csv(centers, normals, coord_file, 
                                      tomogram_name=(args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram' else (args.mask if getattr(args, 'mask', None) else 'tomogram')))
             
-            # Save RELION STAR file
+            # Save RELION STAR file (simplified format)
             star_file = output_dir / "particles.star"
-            convert_to_relion_star(
+            from tomopanda.core.mesh_geodesic import _save_simplified_relion_star
+            _save_simplified_relion_star(
                 centers, normals, star_file, 
                 tomogram_name=(args.tomogram_name if getattr(args, 'tomogram_name', None) and args.tomogram_name != 'tomogram' else (args.mask if getattr(args, 'mask', None) else 'tomogram')),
-                particle_diameter=args.particle_diameter
+                particle_diameter=args.particle_diameter,
+                voxel_size=args.voxel_size
             )
             
             # Save coordinate file

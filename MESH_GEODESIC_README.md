@@ -26,7 +26,7 @@ from tomopanda.utils.mrc_utils import load_membrane_mask
 from tomopanda.utils.relion_utils import convert_to_relion_star
 
 # 创建采样器
-sampler = create_mesh_geodesic_sampler(min_distance=20.0)
+sampler = create_mesh_geodesic_sampler(expected_particle_size=20.0)
 
 # 加载膜掩码
 mask = load_membrane_mask("membrane_mask.mrc")
@@ -48,13 +48,20 @@ tomopanda sample mesh-geodesic --create-synthetic --output results/
 # 使用真实膜掩码
 tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
 
-# 自定义参数
+# 自定义参数 (使用expected particle size - taubin iterations会自动计算)
 tomopanda sample mesh-geodesic \
     --mask membrane_mask.mrc \
     --output results/ \
-    --min-distance 25.0 \
-    --particle-radius 12.0 \
+    --expected-particle-size 25.0 \
     --smoothing-sigma 2.0 \
+    --verbose
+
+# 替代方案: 使用手动taubin iterations (不使用expected particle size)
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --smoothing-sigma 2.0 \
+    --taubin-iterations 15 \
     --verbose
 ```
 
@@ -73,7 +80,7 @@ from tomopanda.utils.relion_utils import convert_to_relion_star
 
 # 方式A：合成掩码 + 一键运行 + 批量保存
 mask = generate_synthetic_mask(shape=(100,100,100), center=(50,50,50), radius=30)
-centers, normals = run_mesh_geodesic_sampling(mask, min_distance=20.0, particle_radius=10.0)
+centers, normals = run_mesh_geodesic_sampling(mask, expected_particle_size=20.0, particle_radius=10.0)
 save_sampling_outputs(
     output_dir="results",
     centers=centers,
@@ -84,7 +91,7 @@ save_sampling_outputs(
 )
 
 # 方式B：自定义流程
-sampler = create_mesh_geodesic_sampler(min_distance=20.0)
+sampler = create_mesh_geodesic_sampler(expected_particle_size=20.0)
 mask = load_membrane_mask("membrane_mask.mrc")
 centers, normals = sampler.sample_membrane_points(mask, particle_radius=10.0)
 convert_to_relion_star(centers, normals, "particles.star")

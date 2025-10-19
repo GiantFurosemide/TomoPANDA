@@ -1,6 +1,6 @@
 """
-基础命令类
-所有命令的基类
+Base command class
+Base class for all commands
 """
 
 import argparse
@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 
 class BaseCommand(ABC):
-    """命令基类"""
+    """Base command class"""
     
     def __init__(self):
         self.name = self.get_name()
@@ -17,38 +17,38 @@ class BaseCommand(ABC):
     
     @abstractmethod
     def get_name(self) -> str:
-        """获取命令名称"""
+        """Get command name"""
         pass
     
     @abstractmethod
     def get_description(self) -> str:
-        """获取命令描述"""
+        """Get command description"""
         pass
     
     @abstractmethod
     def add_parser(self, subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
-        """添加命令参数解析器"""
+        """Add command argument parser"""
         pass
     
     @abstractmethod
     def execute(self, args: argparse.Namespace) -> int:
-        """执行命令"""
+        """Execute command"""
         pass
     
     def add_common_args(self, parser: argparse.ArgumentParser) -> None:
-        """添加通用参数"""
+        """Add common arguments"""
         parser.add_argument(
             '--verbose', '-v',
             action='store_true',
-            help='显示详细输出'
+            help='Show verbose output'
         )
         parser.add_argument(
             '--config', '-c',
             type=str,
-            help='配置文件路径'
+            help='Configuration file path'
         )
         parser.add_argument(
             '--output', '-o',
             type=str,
-            help='输出目录或文件路径'
+            help='Output directory or file path'
         )

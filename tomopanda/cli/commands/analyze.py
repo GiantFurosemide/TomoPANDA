@@ -1,5 +1,5 @@
 """
-数据分析命令
+Data analysis command
 tomopanda analyze <input> [options]
 """
 
@@ -11,127 +11,127 @@ from .base import BaseCommand
 
 
 class AnalyzeCommand(BaseCommand):
-    """数据分析命令"""
+    """Data analysis command"""
     
     def get_name(self) -> str:
         return "analyze"
     
     def get_description(self) -> str:
-        return "分析断层扫描数据和检测结果"
+        return "Analyze tomographic data and detection results"
     
     def add_parser(self, subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
         parser = subparsers.add_parser(
             self.name,
             help=self.description,
-            description="分析断层扫描数据和粒子检测结果，生成统计报告"
+            description="Analyze tomographic data and particle detection results, generate statistical reports"
         )
         
-        # 必需参数
+        # Required parameters
         parser.add_argument(
             'input',
             type=str,
-            help='输入数据文件路径'
+            help='Input data file path'
         )
         
-        # 分析类型
+        # Analysis type
         parser.add_argument(
             '--analysis', '-a',
             choices=['density', 'distribution', 'orientation', 'size', 'quality'],
             nargs='+',
             default=['density'],
-            help='分析类型 (默认: density)'
+            help='Analysis type (default: density)'
         )
         
-        # 统计参数
+        # Statistical parameters
         parser.add_argument(
             '--bins',
             type=int,
             default=50,
-            help='直方图箱数 (默认: 50)'
+            help='Number of histogram bins (default: 50)'
         )
         parser.add_argument(
             '--percentiles',
             nargs='+',
             type=float,
             default=[25, 50, 75],
-            help='百分位数 (默认: 25, 50, 75)'
+            help='Percentiles (default: 25, 50, 75)'
         )
         
-        # 过滤参数
+        # Filter parameters
         parser.add_argument(
             '--min-confidence',
             type=float,
             default=0.0,
-            help='最小置信度阈值'
+            help='Minimum confidence threshold'
         )
         parser.add_argument(
             '--min-size',
             type=float,
-            help='最小粒子尺寸'
+            help='Minimum particle size'
         )
         parser.add_argument(
             '--max-size',
             type=float,
-            help='最大粒子尺寸'
+            help='Maximum particle size'
         )
         
-        # 输出参数
+        # Output parameters
         parser.add_argument(
             '--report-format',
             choices=['json', 'csv', 'html', 'pdf'],
             default='json',
-            help='报告格式 (默认: json)'
+            help='Report format (default: json)'
         )
         parser.add_argument(
             '--include-plots',
             action='store_true',
-            help='包含统计图表'
+            help='Include statistical plots'
         )
         parser.add_argument(
             '--save-raw-data',
             action='store_true',
-            help='保存原始分析数据'
+            help='Save raw analysis data'
         )
         
-        # 添加通用参数
+        # Add common arguments
         self.add_common_args(parser)
         
         return parser
     
     def execute(self, args: argparse.Namespace) -> int:
-        """执行分析命令"""
+        """Execute analysis command"""
         try:
-            # 验证输入文件
+            # Validate input file
             input_path = Path(args.input)
             if not input_path.exists():
-                print(f"错误: 输入文件不存在: {args.input}")
+                print(f"Error: Input file does not exist: {args.input}")
                 return 1
             
-            # 设置输出路径
+            # Set output path
             output_path = self._get_output_path(args)
             
-            # 执行分析
-            print(f"开始数据分析...")
-            print(f"输入文件: {args.input}")
-            print(f"输出路径: {output_path}")
-            print(f"分析类型: {args.analysis}")
-            print(f"报告格式: {args.report_format}")
+            # Execute analysis
+            print(f"Starting data analysis...")
+            print(f"Input file: {args.input}")
+            print(f"Output path: {output_path}")
+            print(f"Analysis type: {args.analysis}")
+            print(f"Report format: {args.report_format}")
             
-            # TODO: 实现实际的分析逻辑
+            # TODO: Implement actual analysis logic
             self._run_analysis(args, output_path)
             
-            print("分析完成!")
+            print("Analysis completed!")
             return 0
             
         except Exception as e:
-            print(f"分析过程中发生错误: {e}")
+            print(f"Error occurred during analysis: {e}")
             if args.verbose:
                 import traceback
                 traceback.print_exc()
             return 1
     
     def _get_output_path(self, args: argparse.Namespace) -> Path:
-        """获取输出路径"""
+        """Get output path"""
         if args.output:
             return Path(args.output)
         
@@ -141,8 +141,8 @@ class AnalyzeCommand(BaseCommand):
         return output_dir
     
     def _run_analysis(self, args: argparse.Namespace, output_path: Path) -> None:
-        """运行分析逻辑"""
-        # TODO: 实现实际的分析逻辑
-        # 这里应该调用TomoPANDA的分析模块
-        print("分析逻辑待实现...")
+        """Run analysis logic"""
+        # TODO: Implement actual analysis logic
+        # This should call TomoPANDA analysis module
+        print("Analysis logic to be implemented...")
         pass
