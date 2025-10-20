@@ -137,6 +137,16 @@ tomopanda sample mesh-geodesic \
     --taubin-iterations 15 \
     --verbose
 
+# Generate mesh variants with noise injection
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --expected-particle-size 20.0 \
+    --add-noise \
+    --noise-scale-factor 0.2 \
+    --random-seed 42 \
+    --verbose
+
 # Voxel surface sampling
 tomopanda sample voxel-sample [OPTIONS]
 

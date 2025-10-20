@@ -138,6 +138,17 @@ Examples:
             type=int,
             help='Random seed for mesh generation (None for deterministic)'
         )
+        parser.add_argument(
+            '--add-noise',
+            action='store_true',
+            help='Add small Gaussian noise to smoothed mask before SDF (default: False). Use to generate mesh variants.'
+        )
+        parser.add_argument(
+            '--noise-scale-factor',
+            type=float,
+            default=0.1,
+            help='Multiplier for noise std, scaled by smoothing_sigma (default: 0.1)'
+        )
         
         # Synthetic data parameters
         parser.add_argument(
@@ -611,7 +622,9 @@ Examples:
             smoothing_sigma=args.smoothing_sigma,
             taubin_iterations=args.taubin_iterations,
             expected_particle_size=getattr(args, 'expected_particle_size', None),
-            random_seed=getattr(args, 'random_seed', None)
+            random_seed=getattr(args, 'random_seed', None),
+            add_noise=getattr(args, 'add_noise', False),
+            noise_scale_factor=getattr(args, 'noise_scale_factor', 0.1)
         )
         
         if args.verbose:
@@ -622,6 +635,9 @@ Examples:
                 print(f"  - Expected particle size: {args.expected_particle_size}")
             if getattr(args, 'random_seed', None) is not None:
                 print(f"  - Random seed: {args.random_seed}")
+            if getattr(args, 'add_noise', False):
+                print(f"  - Add noise: {args.add_noise}")
+                print(f"  - Noise scale factor: {getattr(args, 'noise_scale_factor', 0.1)}")
         
         # Extract all triangle centers and normals
         print("\n=== Extracting All Triangle Centers ===")
