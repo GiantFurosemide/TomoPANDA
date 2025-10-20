@@ -60,9 +60,37 @@ tomopanda sample mesh-geodesic --create-synthetic --output results/
 # Use real membrane mask for sampling
 tomopanda sample mesh-geodesic --mask membrane_mask.mrc --output results/
 
-# Use voxel surface sampling and export RELION 5 STAR
-tomopanda sample voxel-sample --create-synthetic --output voxel_results/
-tomopanda sample voxel-sample --mask membrane_mask.mrc --min-distance 20 --edge-distance 10 --output voxel_results/
+# Custom parameters with expected particle size
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --expected-particle-size 25.0 \
+    --smoothing-sigma 2.0 \
+    --verbose
+
+# Generate mesh variants with noise injection
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --expected-particle-size 20.0 \
+    --add-noise \
+    --noise-scale-factor 0.2 \
+    --random-seed 42 \
+    --verbose
+
+# Manual taubin iterations (without expected particle size)
+tomopanda sample mesh-geodesic \
+    --mask membrane_mask.mrc \
+    --output results/ \
+    --smoothing-sigma 2.0 \
+    --taubin-iterations 15 \
+    --random-seed 123 \
+    --verbose
+
+# Generate multiple mesh variants for ensemble sampling
+tomopanda sample mesh-geodesic --create-synthetic --random-seed 42 --output variant_1/
+tomopanda sample mesh-geodesic --create-synthetic --random-seed 123 --output variant_2/
+tomopanda sample mesh-geodesic --create-synthetic --random-seed 456 --output variant_3/
 ```
 
 ### Python API Usage
@@ -147,19 +175,6 @@ tomopanda sample mesh-geodesic \
     --random-seed 42 \
     --verbose
 
-# Voxel surface sampling
-tomopanda sample voxel-sample [OPTIONS]
-
-# Test with synthetic data
-tomopanda sample voxel-sample --create-synthetic --output voxel_results/
-
-# Use real membrane mask
-tomopanda sample voxel-sample \
-    --mask membrane_mask.mrc \
-    --output voxel_results/ \
-    --min-distance 25.0 \
-    --edge-distance 12.0 \
-    --verbose
 ```
 
 ### Other Commands
@@ -263,17 +278,13 @@ For detailed algorithm description, please refer to [mesh_geodesic_algorithm.md]
 - `--particle-diameter`: Particle diameter (Angstroms)
 - `--confidence`: Confidence score
 
-### Voxel Surface Sampling Parameters
-
-- `--min-distance`: Minimum Euclidean distance between sampling points (pixels)
-- `--edge-distance`: Minimum distance from voxel boundary (pixels) to avoid half-particles
-- `--voxel-size`: Voxel size (X,Y,Z) (Angstroms) for scaling coordinates to physical units
 
 ## Performance Optimization
 
 1. For large datasets, consider using parallel processing
-2. Adjust `min_distance` parameter to balance sampling density and computation time
+2. Adjust `expected_particle_size` parameter to balance mesh density and computation time
 3. Use appropriate `particle_radius` to avoid boundary conflicts
+4. For very large structures, use larger `expected_particle_size` to generate coarser meshes
 
 ## Troubleshooting
 
