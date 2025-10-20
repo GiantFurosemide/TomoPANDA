@@ -70,7 +70,7 @@ from tomopanda.core.mesh_geodesic import create_mesh_geodesic_sampler
 from tomopanda.utils.mrc_utils import load_membrane_mask
 from tomopanda.utils.relion_utils import convert_to_relion_star
 
-# Create sampler
+# Create sampler (noise is disabled by default for smooth SDF)
 sampler = create_mesh_geodesic_sampler(expected_particle_size=20.0)
 
 # Load membrane mask
@@ -203,6 +203,8 @@ For detailed algorithm description, please refer to [mesh_geodesic_algorithm.md]
 - `--taubin-iterations`: Number of Taubin smoothing iterations (default: 10) - **mutually exclusive with --expected-particle-size**
 - `--expected-particle-size`: Expected particle size in pixels for mesh density control - **automatically calculates taubin iterations** (mutually exclusive with --taubin-iterations)
 - `--random-seed`: Random seed for mesh generation (None for deterministic)
+- `--add-noise`: If set, inject small Gaussian noise into the smoothed mask before SDF (default: False). Use to generate mesh variants; keep off for smooth SDF, especially with simple shapes.
+- `--noise-scale-factor`: Multiplier for the injected noise std, scaled by `smoothing_sigma` (default: 0.1). Effective std is `noise_scale_factor * max(1.0, smoothing_sigma)`.
 
 **Note**: `--expected-particle-size` and `--taubin-iterations` are mutually exclusive. When `--expected-particle-size` is specified, taubin iterations are automatically calculated as `max(5, min(30, int(expected_particle_size / 5)))`.
 

@@ -25,7 +25,7 @@ from tomopanda.core.mesh_geodesic import create_mesh_geodesic_sampler
 from tomopanda.utils.mrc_utils import load_membrane_mask
 from tomopanda.utils.relion_utils import convert_to_relion_star
 
-# 创建采样器
+# 创建采样器（默认关闭噪声，SDF 更平滑）
 sampler = create_mesh_geodesic_sampler(expected_particle_size=20.0)
 
 # 加载膜掩码
@@ -115,7 +115,11 @@ convert_to_relion_star(centers, normals, "particles.star")
 - `min_distance`: 采样点间最小距离（像素）
 - `particle_radius`: 粒子半径，用于边界检查
 - `smoothing_sigma`: 高斯平滑参数
-- `taubin_iterations`: Taubin平滑迭代次数
+- `taubin_iterations`: Taubin平滑迭代次数（与 `expected_particle_size` 互斥）
+- `expected_particle_size`: 期望颗粒大小（像素），自动控制 mesh 密度与采样距离
+- `random_seed`: 随机种子（可选）
+- `add_noise`: 是否在 SDF 前对平滑后的掩码注入微小高斯噪声，默认 False。用于生成 mesh 变体；对简单形状（如球）建议关闭以获得更光滑的 SDF。
+- `noise_scale_factor`: 噪声强度系数，实际标准差为 `noise_scale_factor * max(1.0, smoothing_sigma)`，默认 0.1。
 
 ## 文件结构 (File Structure)
 

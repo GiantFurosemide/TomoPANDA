@@ -18,6 +18,7 @@ from pathlib import Path
 
 # Optional heavy deps used by helper utilities only
 import pandas as pd
+from tomopanda.utils.mrc_utils import MRCReader
 
 from tomopanda.utils.relion_utils import (
     convert_to_relion_star,
@@ -38,7 +39,9 @@ class MeshGeodesicSampler:
                  smoothing_sigma: float = 1.5,
                  taubin_iterations: int = 10,
                  expected_particle_size: Optional[float] = None,
-                 random_seed: Optional[int] = None):
+                 random_seed: Optional[int] = None,
+                 add_noise: bool = False,
+                 noise_scale_factor: float = 0.1):
         """
         Initialize the mesh geodesic sampler.
         
@@ -47,11 +50,15 @@ class MeshGeodesicSampler:
             taubin_iterations: Number of Taubin smoothing iterations
             expected_particle_size: Expected particle size in pixels for mesh density control
             random_seed: Random seed for mesh generation (None for deterministic)
+            add_noise: If True, add small Gaussian noise to the smoothed mask to introduce variation
+            noise_scale_factor: Scales the standard deviation of added noise (multiplied by smoothing_sigma)
         """
         self.smoothing_sigma = smoothing_sigma
         self.taubin_iterations = taubin_iterations
         self.expected_particle_size = expected_particle_size
         self.random_seed = random_seed
+        self.add_noise = add_noise
+        self.noise_scale_factor = noise_scale_factor
     
     def _get_sampling_distance(self) -> float:
         """
@@ -99,11 +106,11 @@ class MeshGeodesicSampler:
         # Apply Gaussian smoothing to reduce noise
         mask_smooth = gaussian_filter(mask.astype(float), sigma=self.smoothing_sigma)
         
-        # Add random noise to introduce mesh variation (if random_seed is provided)
-        if self.random_seed is not None:
-            # Add small random noise to create mesh variation
-            noise_scale = 0.1 * self.smoothing_sigma  # Scale noise with smoothing
-            random_noise = np.random.normal(0, noise_scale, mask_smooth.shape)
+        # Optionally add small random noise to introduce mesh variation
+        # Disabled by default to keep SDF smooth and stable for simple shapes
+        if self.add_noise:
+            noise_std = float(self.noise_scale_factor) * max(1.0, float(self.smoothing_sigma))
+            random_noise = np.random.normal(0.0, noise_std, mask_smooth.shape)
             mask_smooth = mask_smooth + random_noise
         
         # Create signed distance field: outside - inside
@@ -698,7 +705,9 @@ class MeshGeodesicSampler:
 def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
                                 taubin_iterations: int = 10,
                                 expected_particle_size: Optional[float] = None,
-                                random_seed: Optional[int] = None) -> MeshGeodesicSampler:
+                                random_seed: Optional[int] = None,
+                                add_noise: bool = False,
+                                noise_scale_factor: float = 0.1) -> MeshGeodesicSampler:
     """
     Factory function to create a MeshGeodesicSampler instance.
     
@@ -707,6 +716,8 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
         taubin_iterations: Number of Taubin smoothing iterations
         expected_particle_size: Expected particle size in pixels for mesh density control
         random_seed: Random seed for mesh generation (None for deterministic)
+        add_noise: If True, add small Gaussian noise to the smoothed mask to introduce variation
+        noise_scale_factor: Scales the standard deviation of added noise (multiplied by smoothing_sigma)
         
     Returns:
         Configured MeshGeodesicSampler instance
@@ -715,7 +726,9 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
         smoothing_sigma=smoothing_sigma,
         taubin_iterations=taubin_iterations,
         expected_particle_size=expected_particle_size,
-        random_seed=random_seed
+        random_seed=random_seed,
+        add_noise=add_noise,
+        noise_scale_factor=noise_scale_factor
     )
 
 
@@ -831,6 +844,7 @@ def save_sampling_outputs(
     centers: np.ndarray,
     normals: np.ndarray,
     *,
+    mrc_path: Optional[Union[str, Path]] = None,
     tomogram_name: str = "tomogram",
     particle_diameter: float = 200.0,
     voxel_size: Optional[Tuple[float, float, float]] = None,
@@ -851,12 +865,32 @@ def save_sampling_outputs(
       - visualize_results.py (optional viewer script)
     
     Args:
+        mrc_path: Optional path to source MRC; if provided and voxel_size is None,
+                  voxel size will default to the MRC header pixel size (x,y,z).
         use_simplified_relion: If True, use simplified RELION format with minimal columns
     
     Returns tuple of generated file paths.
     """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine effective voxel size: prefer explicit voxel_size, else derive from MRC
+    effective_voxel_size: Optional[Tuple[float, float, float]] = None
+    if voxel_size is not None:
+        effective_voxel_size = tuple(map(float, voxel_size))  # type: ignore[arg-type]
+    elif mrc_path is not None:
+        try:
+            _, meta = MRCReader.read_mrc(mrc_path)
+            vs = meta.get('voxel_size', None)
+            # vs might be a NamedTuple-like or an object with x,y,z attributes
+            if vs is not None:
+                if hasattr(vs, 'x') and hasattr(vs, 'y') and hasattr(vs, 'z'):
+                    effective_voxel_size = (float(vs.x), float(vs.y), float(vs.z))
+                elif isinstance(vs, (tuple, list)) and len(vs) == 3:
+                    effective_voxel_size = (float(vs[0]), float(vs[1]), float(vs[2]))
+        except Exception:
+            # If MRC read fails, fall back to None (no scaling)
+            effective_voxel_size = None
 
     # 1) Coordinates CSV with normals
     coord_csv = out_dir / "sampling_coordinates.csv"
@@ -875,7 +909,7 @@ def save_sampling_outputs(
             star_file,
             tomogram_name=tomogram_name,
             particle_diameter=particle_diameter,
-            voxel_size=voxel_size,
+            voxel_size=effective_voxel_size,
         )
     else:
         # Use legacy format
@@ -893,7 +927,7 @@ def save_sampling_outputs(
         centers,
         normals,
         coordinates_file,
-        voxel_size=voxel_size,
+        voxel_size=effective_voxel_size,
     )
 
     # 4) Prior angles
