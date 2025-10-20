@@ -618,21 +618,35 @@ Examples:
         
         # Create mesh geodesic sampler
         print("\n=== Creating Mesh Geodesic Sampler ===")
-        sampler = create_mesh_geodesic_sampler(
-            smoothing_sigma=args.smoothing_sigma,
-            taubin_iterations=args.taubin_iterations,
-            expected_particle_size=getattr(args, 'expected_particle_size', None),
-            random_seed=getattr(args, 'random_seed', None),
-            add_noise=getattr(args, 'add_noise', False),
-            noise_scale_factor=getattr(args, 'noise_scale_factor', 0.1)
-        )
+        
+        # Determine which parameters to use
+        if getattr(args, 'expected_particle_size', None) is not None:
+            # Use expected_particle_size (taubin_iterations will be auto-calculated)
+            sampler = create_mesh_geodesic_sampler(
+                smoothing_sigma=args.smoothing_sigma,
+                expected_particle_size=getattr(args, 'expected_particle_size', None),
+                random_seed=getattr(args, 'random_seed', None),
+                add_noise=getattr(args, 'add_noise', False),
+                noise_scale_factor=getattr(args, 'noise_scale_factor', 0.1)
+            )
+        else:
+            # Use manual taubin_iterations
+            sampler = create_mesh_geodesic_sampler(
+                smoothing_sigma=args.smoothing_sigma,
+                taubin_iterations=args.taubin_iterations,
+                random_seed=getattr(args, 'random_seed', None),
+                add_noise=getattr(args, 'add_noise', False),
+                noise_scale_factor=getattr(args, 'noise_scale_factor', 0.1)
+            )
         
         if args.verbose:
             print(f"Triangle extraction parameters:")
             print(f"  - Smoothing sigma: {args.smoothing_sigma}")
-            print(f"  - Taubin iterations: {args.taubin_iterations}")
             if getattr(args, 'expected_particle_size', None) is not None:
                 print(f"  - Expected particle size: {args.expected_particle_size}")
+                print(f"  - Taubin iterations: auto-calculated based on particle size")
+            else:
+                print(f"  - Taubin iterations: {args.taubin_iterations}")
             if getattr(args, 'random_seed', None) is not None:
                 print(f"  - Random seed: {args.random_seed}")
             if getattr(args, 'add_noise', False):
