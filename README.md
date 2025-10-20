@@ -1,4 +1,4 @@
-# TomoPANDA
+# TomoPANDA v0.1.2
 
 CryoET membrane protein detection tool based on SE(3) equivariant transformer
 
@@ -10,10 +10,12 @@ TomoPANDA is a toolkit specifically designed for membrane protein detection in c
 
 - **SE(3) Equivariant Transformer**: Advanced architecture based on geometric deep learning
 - **Membrane Protein Detection**: Specialized detection and localization algorithms for membrane proteins
-- **Mesh Geodesic Sampling**: Membrane protein sampling algorithm based on geodesic distance
-- **Multi-format Support**: Supports standard formats like MRC, RELION
+- **Mesh Geodesic Sampling**: Advanced membrane protein sampling with adaptive mesh density control
+- **SDF-aligned Normals**: Surface normals aligned with signed distance field gradients
+- **Multi-format Support**: Supports standard formats like MRC, RELION STAR, ChimeraX
 - **Command Line Interface**: Simple and easy-to-use CLI tools
 - **Modular Design**: Highly modular code architecture
+- **Adaptive Processing**: Automatic parameter selection based on expected particle size
 
 ## Installation
 
@@ -39,7 +41,7 @@ pip install -r requirements.txt
 ### Development Installation
 
 ```bash
-git clone https://github.com/your-org/TomoPANDA.git
+git clone https://github.com/GiantFurosemide/TomoPANDA.git
 cd TomoPANDA
 pip install -e .
 ```
@@ -66,21 +68,43 @@ tomopanda sample voxel-sample --mask membrane_mask.mrc --min-distance 20 --edge-
 ### Python API Usage
 
 ```python
-from tomopanda.core.mesh_geodesic import create_mesh_geodesic_sampler
-from tomopanda.utils.mrc_utils import load_membrane_mask
-from tomopanda.utils.relion_utils import convert_to_relion_star
+from tomopanda.core.mesh_geodesic import (
+    create_mesh_geodesic_sampler,
+    run_mesh_geodesic_sampling,
+    save_sampling_outputs
+)
+from tomopanda.utils.mrc_utils import MRCReader
 
-# Create sampler (noise is disabled by default for smooth SDF)
-sampler = create_mesh_geodesic_sampler(expected_particle_size=20.0)
+# Method 1: Using the sampler class
+sampler = create_mesh_geodesic_sampler(
+    expected_particle_size=20.0,
+    smoothing_sigma=1.5,
+    random_seed=42
+)
 
 # Load membrane mask
-mask = load_membrane_mask("membrane_mask.mrc")
+mask = MRCReader.read_membrane_mask("membrane_mask.mrc")
 
 # Execute sampling
 centers, normals = sampler.sample_membrane_points(mask, particle_radius=10.0)
 
-# Save as RELION format
-convert_to_relion_star(centers, normals, "particles.star")
+# Method 2: One-shot convenience function
+centers, normals = run_mesh_geodesic_sampling(
+    mask,
+    expected_particle_size=20.0,
+    particle_radius=10.0,
+    random_seed=42
+)
+
+# Save all standard outputs
+save_sampling_outputs(
+    output_dir="results/",
+    centers=centers,
+    normals=normals,
+    tomogram_name="demo_tomo",
+    particle_diameter=200.0,
+    create_vis_script=True
+)
 ```
 
 ## Command Line Interface
@@ -180,20 +204,31 @@ tomopanda/
 
 ### Mesh Geodesic Sampling
 
-Mesh geodesic sampling is a membrane protein sampling algorithm based on mesh geodesic distance:
+Mesh geodesic sampling is an advanced membrane protein sampling algorithm with adaptive mesh density control:
 
-1. **Signed Distance Field**: Create SDF from binary membrane mask
-2. **Mesh Extraction**: Extract triangular mesh using Marching Cubes
-3. **Geodesic Sampling**: Uniform sampling based on geodesic distance
-4. **Post-processing**: NMS and boundary checking
+1. **Signed Distance Field**: Create SDF from binary membrane mask with optional noise injection
+2. **Adaptive Mesh Extraction**: Extract triangular mesh using Marching Cubes with particle-size-based spacing
+3. **Multi-level Mesh Processing**: Adaptive Taubin smoothing, decimation, and subdivision
+4. **SDF-aligned Normals**: Surface normals aligned with SDF gradient direction
+5. **Distance-constrained Sampling**: Poisson-like sampling with spatial hash grid
+6. **Post-processing**: Non-maximum suppression and boundary feasibility checking
+
+**Key Features:**
+- Automatic parameter selection based on `expected_particle_size`
+- SDF gradient-aligned surface normals for accurate orientation
+- Adaptive mesh density control (fine for small particles, coarse for large particles)
+- Support for mesh variants via random noise injection
 
 For detailed algorithm description, please refer to [mesh_geodesic_algorithm.md](tomopanda/doc/mesh_geodesic_algorithm.md)
 
 ## Output Formats
 
-- **CSV Coordinate File**: Contains x,y,z coordinates and nx,ny,nz normal vectors
-- **RELION STAR File**: Standard RELION format with particle coordinates and Euler angles
-- **Prior Angles File**: Angle priors for 3D classification
+- **sampling_coordinates.csv**: Contains x,y,z coordinates and nx,ny,nz normal vectors
+- **particles.star**: Simplified RELION STAR format with particle coordinates and Euler angles
+- **coordinates.csv**: Position and normal vectors for downstream processing
+- **prior_angles.csv**: Angle priors for 3D classification
+- **visualize_results.py**: Optional matplotlib-based visualization script
+- **ChimeraX .cxc files**: For 3D visualization in ChimeraX
 
 ## Parameter Description
 
@@ -206,7 +241,11 @@ For detailed algorithm description, please refer to [mesh_geodesic_algorithm.md]
 - `--add-noise`: If set, inject small Gaussian noise into the smoothed mask before SDF (default: False). Use to generate mesh variants; keep off for smooth SDF, especially with simple shapes.
 - `--noise-scale-factor`: Multiplier for the injected noise std, scaled by `smoothing_sigma` (default: 0.1). Effective std is `noise_scale_factor * max(1.0, smoothing_sigma)`.
 
-**Note**: `--expected-particle-size` and `--taubin-iterations` are mutually exclusive. When `--expected-particle-size` is specified, taubin iterations are automatically calculated as `max(5, min(30, int(expected_particle_size / 5)))`.
+**Note**: `--expected-particle-size` and `--taubin-iterations` are mutually exclusive. When `--expected-particle-size` is specified, the system automatically:
+- Calculates sampling distance: `max(5.0, expected_particle_size / 2.0)`
+- Determines SDF resolution: `max(0.5, min(3.0, expected_particle_size / 5.0))`
+- Sets Marching Cubes spacing: `max(0.5, min(5.0, expected_particle_size / 10.0))`
+- Maps to adaptive Taubin iterations based on particle size brackets
 
 ### Output Parameters
 
