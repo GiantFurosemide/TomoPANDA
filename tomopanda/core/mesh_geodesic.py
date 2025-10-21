@@ -752,22 +752,31 @@ def generate_synthetic_mask(
     shape: Tuple[int, int, int] = (100, 100, 100),
     center: Tuple[int, int, int] = (50, 50, 50),
     radius: int = 30,
+    membrane_thickness: int = 4,
 ) -> np.ndarray:
     """
-    Create a simple spherical binary mask for testing.
+    Create a spherical membrane mask with specified thickness for testing.
     
     Args:
         shape: Volume shape (z, y, x)
         center: Sphere center (z, y, x)
         radius: Sphere radius in voxels
+        membrane_thickness: Thickness of the membrane in voxels
     
     Returns:
         Binary uint8 mask with values in {0, 1}
     """
     z, y, x = np.ogrid[:shape[0], :shape[1], :shape[2]]
     distance = np.sqrt((x - center[2])**2 + (y - center[1])**2 + (z - center[0])**2)
-    mask = (distance <= radius).astype(np.uint8)
-    return mask
+    
+    # Create membrane: outer radius - inner radius = membrane thickness
+    inner_radius = radius - membrane_thickness
+    outer_radius = radius
+    
+    # Membrane is the region between inner and outer radius
+    membrane_mask = (distance >= inner_radius) & (distance <= outer_radius)
+    
+    return membrane_mask.astype(np.uint8)
 
 
 def run_mesh_geodesic_sampling(
