@@ -75,26 +75,20 @@ class MeshGeodesicSampler:
             # Default fallback
             return 20.0
         
-    def create_signed_distance_field(self, mask: np.ndarray, target_resolution: float = None) -> np.ndarray:
+    def create_signed_distance_field(self, mask: np.ndarray, target_resolution: float = 1.0) -> np.ndarray:
         """
         Create signed distance field from binary mask.
-        
+
         Args:
             mask: Binary mask (0/1) indicating membrane regions
             target_resolution: Target resolution for mesh generation (pixels per voxel)
             
         Returns:
-            Signed distance field where phi>0 is outside membrane, phi<0 is inside
+            Signed distance field where phi=0 is at membrane center, phi>0 is distance to membrane center
         """
         # Set random seed if provided
         if self.random_seed is not None:
             np.random.seed(self.random_seed)
-        
-        # Adaptive resolution based on expected particle size
-        if target_resolution is None and self.expected_particle_size is not None:
-            # Calculate target resolution: smaller particles need finer resolution
-            # Rule: resolution = particle_size / 5 (gives ~5 voxels per particle)
-            target_resolution = max(0.5, min(3.0, self.expected_particle_size / 5.0))
         
         # Apply resolution scaling if needed
         if target_resolution is not None and target_resolution != 1.0:
@@ -113,8 +107,25 @@ class MeshGeodesicSampler:
             random_noise = np.random.normal(0.0, noise_std, mask_smooth.shape)
             mask_smooth = mask_smooth + random_noise
         
-        # Create signed distance field: outside - inside
-        phi = edt(1 - (mask_smooth > 0.5)) - edt((mask_smooth > 0.5))
+        # Create signed distance field: distance to membrane center
+        # 计算到膜中心的距离，膜中心定义为phi=0
+        # 所有值都为正值，表示到膜中心的距离
+        
+        # 找到膜区域
+        membrane_mask = (mask_smooth > 0.5).astype(float)
+        
+        # 计算到膜区域边界的距离
+        distance_to_boundary = edt(1 - membrane_mask)
+        
+        # 计算膜区域内部的厚度
+        distance_inside_membrane = edt(membrane_mask)
+        
+        # 新的SDF：膜中心为0，其他位置为到膜中心的距离
+        # 膜内部：使用到膜边界的距离作为到中心的距离
+        # 膜外部：使用到膜边界的距离
+        phi = np.where(membrane_mask > 0,
+                      distance_inside_membrane,  # 膜内部：到膜中心的距离
+                      distance_to_boundary)      # 膜外部：到膜边界的距离
         
         return phi
     
@@ -135,12 +146,13 @@ class MeshGeodesicSampler:
             if self.expected_particle_size is not None:
                 # Adaptive spacing: larger particles -> coarser mesh
                 # Scale factor: particle_size / 10 gives reasonable mesh density
-                scale_factor = max(0.5, min(5.0, self.expected_particle_size / 10.0))
+                scale_factor = max(0.5, min(5.0, self.expected_particle_size / 10.0))   # values is [0.5,5.0]
                 spacing = (scale_factor, scale_factor, scale_factor)
             else:
                 spacing = (1.0, 1.0, 1.0)
         
         # Marching cubes on phi=0 level set
+        # marching_cubes(phi, level=0.0, spacing=spacing)：phi是符号距离场，level=0.0表示提取phi=0的等值面，spacing是网格间距
         verts, faces, _, _ = marching_cubes(phi, level=0.0, spacing=spacing)
         
         # Convert to Open3D mesh (note: skimage returns z,y,x, we need x,y,z)
