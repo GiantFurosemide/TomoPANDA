@@ -194,6 +194,11 @@ class MeshGeodesicSampler:
                 adaptive_iterations = 35  # Maximum smoothing
             
             # Apply taubin smoothing for triangle size control
+            # Taubin 平滑算法
+            # Taubin 平滑是一种网格平滑算法，用于：
+            # 减少网格噪声：去除 marching cubes 产生的锯齿状边缘
+            # 控制三角形大小：通过平滑来间接控制网格密度
+            # 保持形状特征：相比其他平滑方法，Taubin 能更好地保持原始形状
             mesh = mesh.filter_smooth_taubin(number_of_iterations=adaptive_iterations)
             
             # Level 3: Mesh decimation for large particles (direct hole size control)
@@ -218,9 +223,9 @@ class MeshGeodesicSampler:
         # Compute vertex normals
         mesh.compute_vertex_normals()
 
-        # Try to orient mesh normals outward using the SDF gradient
+        # Orient mesh normals for consistency using connectivity-based approach
         try:
-            mesh = self._orient_mesh_normals_outward(mesh, phi)
+            mesh = self._orient_mesh_normals_consistent(mesh)
         except Exception:
             # Fallback silently if orientation fails; normals remain as computed
             pass
@@ -250,16 +255,16 @@ class MeshGeodesicSampler:
                                         mesh: o3d.geometry.TriangleMesh,
                                         phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Compute face centers and normals aligned with SDF gradient.
+        Compute face centers and consistently oriented normals.
         
         Args:
             mesh: Open3D triangle mesh
-            phi: Signed distance field
+            phi: Signed distance field (used for mesh processing)
             
         Returns:
             Tuple of (face_centers, face_normals) where:
             - face_centers: Face center coordinates (N_faces, 3)
-            - face_normals: Face normals aligned with SDF gradient (N_faces, 3)
+            - face_normals: Consistently oriented face normals (N_faces, 3)
         """
         if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
             return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
@@ -286,10 +291,8 @@ class MeshGeodesicSampler:
         norms[norms == 0] = 1.0  # Avoid division by zero
         face_normals = face_normals / norms
         
-        # Align normals with SDF gradient direction
-        aligned_normals = self._align_normals_with_sdf_gradient(
-            face_centers, face_normals, phi
-        )
+        # Use face normals directly (already consistently oriented)
+        aligned_normals = face_normals
         
         return face_centers, aligned_normals
     
@@ -297,11 +300,11 @@ class MeshGeodesicSampler:
                                        mesh: o3d.geometry.TriangleMesh,
                                        phi: np.ndarray) -> np.ndarray:
         """
-        Get all triangle centers and their normals aligned with SDF gradient.
+        Get all triangle centers and their consistently oriented normals.
         
         Args:
             mesh: Open3D triangle mesh
-            phi: Signed distance field
+            phi: Signed distance field (used for mesh processing)
             
         Returns:
             N*6 array where each row is [x, y, z, nx, ny, nz]
@@ -319,19 +322,19 @@ class MeshGeodesicSampler:
                                          mesh: o3d.geometry.TriangleMesh,
                                          phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Sample mesh faces and compute normals aligned with SDF gradient direction.
+        Sample mesh faces and compute consistently oriented normals.
         
         This method samples faces from the mesh and computes normals that are
-        aligned with the SDF gradient direction (pointing towards positive phi values).
+        consistently oriented using connectivity-based approach.
         
         Args:
             mesh: Open3D triangle mesh
-            phi: Signed distance field
+            phi: Signed distance field (used for mesh processing)
             
         Returns:
             Tuple of (centers, normals) where:
             - centers: Face center coordinates (K, 3)
-            - normals: Face normals aligned with SDF gradient (K, 3)
+            - normals: Consistently oriented face normals (K, 3)
         """
         face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh, phi)
         
@@ -345,49 +348,6 @@ class MeshGeodesicSampler:
         
         return sampled_centers, sampled_normals
     
-    def _align_normals_with_sdf_gradient(self, 
-                                       centers: np.ndarray, 
-                                       normals: np.ndarray,
-                                       phi: np.ndarray) -> np.ndarray:
-        """
-        Align face normals with SDF gradient direction.
-        
-        Args:
-            centers: Face center coordinates (K, 3)
-            normals: Face normals (K, 3)
-            phi: Signed distance field
-            
-        Returns:
-            Aligned normals pointing towards positive phi values
-        """
-        # Compute SDF gradients
-        gz, gy, gx = np.gradient(phi.astype(np.float32))
-        
-        # Sample gradients at face centers
-        z_coords = np.clip(np.rint(centers[:, 2]).astype(int), 0, phi.shape[0] - 1)
-        y_coords = np.clip(np.rint(centers[:, 1]).astype(int), 0, phi.shape[1] - 1)
-        x_coords = np.clip(np.rint(centers[:, 0]).astype(int), 0, phi.shape[2] - 1)
-        
-        # Get SDF gradients at face centers
-        sdf_grad_x = gx[z_coords, y_coords, x_coords]
-        sdf_grad_y = gy[z_coords, y_coords, x_coords]
-        sdf_grad_z = gz[z_coords, y_coords, x_coords]
-        
-        # Stack SDF gradients
-        sdf_gradients = np.column_stack([sdf_grad_x, sdf_grad_y, sdf_grad_z])
-        
-        # Normalize SDF gradients
-        sdf_norms = np.linalg.norm(sdf_gradients, axis=1, keepdims=True)
-        sdf_norms[sdf_norms == 0] = 1.0
-        sdf_gradients = sdf_gradients / sdf_norms
-        
-        # Align normals with SDF gradient direction
-        # If dot product is negative, flip the normal
-        dots = np.sum(normals * sdf_gradients, axis=1)
-        aligned_normals = normals.copy()
-        aligned_normals[dots < 0] = -aligned_normals[dots < 0]
-        
-        return aligned_normals
     
     def _sample_faces_with_distance_constraint(self,
                                              face_centers: np.ndarray,
@@ -622,61 +582,91 @@ class MeshGeodesicSampler:
         surface = mask_bool & (~eroded)
         return surface.astype(np.uint8)
 
-    @staticmethod
-    def _compute_sdf_gradient(phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Compute gradients of SDF in z, y, x order (matching phi layout)."""
-        gz, gy, gx = np.gradient(phi.astype(np.float32))
-        return gz, gy, gx
 
-    def _orient_mesh_normals_outward(self, mesh: o3d.geometry.TriangleMesh, phi: np.ndarray) -> o3d.geometry.TriangleMesh:
+    def _orient_mesh_normals_consistent(self, mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
         """
-        Orient mesh normals to point outward, defined as the direction of increasing SDF.
-
-        Strategy:
-        - Compute SDF gradients on the voxel grid.
-        - For each vertex, sample the nearest gradient (convert vertex x,y,z -> z,y,x index order).
-        - If the average dot between vertex normals and sampled gradients is negative,
-          flip triangle winding to invert normals and recompute.
+        Ensure consistent normal directions for adjacent faces using connectivity-based approach.
+        
+        This method uses breadth-first search to ensure that adjacent faces have
+        consistent normal directions, without relying on SDF gradients.
+        
+        Args:
+            mesh: Open3D triangle mesh
+            
+        Returns:
+            Mesh with consistently oriented normals
         """
-        if len(mesh.vertices) == 0:
+        if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
             return mesh
-
-        gz, gy, gx = self._compute_sdf_gradient(phi)
-        verts = np.asarray(mesh.vertices)
-
-        # Map vertex positions to nearest voxel indices (z,y,x). verts are in (x,y,z)
-        vz = np.clip(np.rint(verts[:, 2]).astype(int), 0, phi.shape[0] - 1)
-        vy = np.clip(np.rint(verts[:, 1]).astype(int), 0, phi.shape[1] - 1)
-        vx = np.clip(np.rint(verts[:, 0]).astype(int), 0, phi.shape[2] - 1)
-
-        grad = np.stack([
-            gx[vz, vy, vx],  # x component
-            gy[vz, vy, vx],  # y component
-            gz[vz, vy, vx],  # z component
-        ], axis=1)
-
-        # Normalize gradients; avoid division by zero
-        grad_norm = np.linalg.norm(grad, axis=1, keepdims=True)
-        grad_norm[grad_norm == 0] = 1.0
-        grad_unit = grad / grad_norm
-
-        # Ensure vertex normals are available
+        
+        faces = np.asarray(mesh.triangles)
+        vertices = np.asarray(mesh.vertices)
+        n_faces = len(faces)
+        
+        # Compute face normals
+        v0 = vertices[faces[:, 0]]
+        v1 = vertices[faces[:, 1]] 
+        v2 = vertices[faces[:, 2]]
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        face_normals = np.cross(edge1, edge2)
+        
+        # Normalize face normals
+        norms = np.linalg.norm(face_normals, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        face_normals = face_normals / norms
+        
+        # Build face adjacency graph
+        face_adjacency = [[] for _ in range(n_faces)]
+        
+        # Find faces that share edges
+        for i in range(n_faces):
+            for j in range(i+1, n_faces):
+                if self._faces_share_edge(faces[i], faces[j]):
+                    face_adjacency[i].append(j)
+                    face_adjacency[j].append(i)
+        
+        # Use BFS to ensure consistency
+        visited = [False] * n_faces
+        queue = [0]  # Start from first face
+        visited[0] = True
+        
+        while queue:
+            current_face = queue.pop(0)
+            
+            for neighbor_face in face_adjacency[current_face]:
+                if not visited[neighbor_face]:
+                    # Check normal direction consistency
+                    dot_product = np.dot(face_normals[current_face], face_normals[neighbor_face])
+                    
+                    # If dot product is negative, flip neighbor face normal
+                    if dot_product < 0:
+                        face_normals[neighbor_face] = -face_normals[neighbor_face]
+                        # Also flip triangle vertex order
+                        faces[neighbor_face] = faces[neighbor_face][::-1]
+                    
+                    visited[neighbor_face] = True
+                    queue.append(neighbor_face)
+        
+        # Update mesh
+        mesh.triangles = o3d.utility.Vector3iVector(faces)
+        mesh.compute_triangle_normals()
         mesh.compute_vertex_normals()
-        vnormals = np.asarray(mesh.vertex_normals)
-
-        # Compute mean alignment
-        dots = np.einsum('ij,ij->i', vnormals, grad_unit)
-        mean_dot = float(np.nanmean(dots))
-
-        if mean_dot < 0.0:
-            # Flip triangle winding to invert normals globally
-            tris = np.asarray(mesh.triangles)
-            tris_flipped = tris[:, ::-1]
-            mesh.triangles = o3d.utility.Vector3iVector(tris_flipped)
-            mesh.compute_triangle_normals()
-            mesh.compute_vertex_normals()
-
+        
         return mesh
+    
+    def _faces_share_edge(self, face1, face2):
+        """Check if two faces share an edge."""
+        edges1 = set()
+        for i in range(3):
+            edge = tuple(sorted([face1[i], face1[(i+1)%3]]))
+            edges1.add(edge)
+        
+        for i in range(3):
+            edge = tuple(sorted([face2[i], face2[(i+1)%3]]))
+            if edge in edges1:
+                return True
+        return False
 
     @staticmethod
     def rasterize_mesh_to_volume(mesh: o3d.geometry.TriangleMesh, volume_shape_zyx: Tuple[int, int, int]) -> np.ndarray:
