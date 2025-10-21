@@ -37,7 +37,6 @@ class MeshGeodesicSampler:
     
     def __init__(self, 
                  smoothing_sigma: float = 1.5,
-                 taubin_iterations: int = 10,
                  expected_particle_size: Optional[float] = None,
                  random_seed: Optional[int] = None,
                  add_noise: bool = False,
@@ -47,14 +46,12 @@ class MeshGeodesicSampler:
         
         Args:
             smoothing_sigma: Gaussian smoothing parameter for mask preprocessing
-            taubin_iterations: Number of Taubin smoothing iterations
             expected_particle_size: Expected particle size in pixels for mesh density control
             random_seed: Random seed for mesh generation (None for deterministic)
             add_noise: If True, add small Gaussian noise to the smoothed mask to introduce variation
             noise_scale_factor: Scales the standard deviation of added noise (multiplied by smoothing_sigma)
         """
         self.smoothing_sigma = smoothing_sigma
-        self.taubin_iterations = taubin_iterations
         self.expected_particle_size = expected_particle_size
         self.random_seed = random_seed
         self.add_noise = add_noise
@@ -70,7 +67,7 @@ class MeshGeodesicSampler:
         if self.expected_particle_size is not None:
             # Use particle size to determine sampling distance
             # Rule: sampling distance = particle_size / 2 for optimal coverage
-            return max(5.0, self.expected_particle_size / 2.0)
+            return max(5.0, self.expected_particle_size / 2.0)  # values is [5.0, expected_particle_size/2.0]
         else:
             # Default fallback
             return 20.0
@@ -217,8 +214,8 @@ class MeshGeodesicSampler:
                 mesh = mesh.subdivide_midpoint(number_of_iterations=1)
                 
         else:
-            # Use default smoothing
-            mesh = mesh.filter_smooth_taubin(number_of_iterations=self.taubin_iterations)
+            # Use default smoothing when expected_particle_size is None
+            mesh = mesh.filter_smooth_taubin(number_of_iterations=10)
         
         # Compute vertex normals
         mesh.compute_vertex_normals()
@@ -252,14 +249,12 @@ class MeshGeodesicSampler:
         return mesh, phi
     
     def _compute_face_centers_and_normals(self, 
-                                        mesh: o3d.geometry.TriangleMesh,
-                                        phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                                        mesh: o3d.geometry.TriangleMesh) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute face centers and consistently oriented normals.
         
         Args:
             mesh: Open3D triangle mesh
-            phi: Signed distance field (used for mesh processing)
             
         Returns:
             Tuple of (face_centers, face_normals) where:
@@ -276,40 +271,23 @@ class MeshGeodesicSampler:
         # Compute face centers
         face_centers = vertices[faces].mean(axis=1)  # (N_faces, 3)
         
-        # Compute face normals using cross product
-        v0 = vertices[faces[:, 0]]
-        v1 = vertices[faces[:, 1]] 
-        v2 = vertices[faces[:, 2]]
+        # Use Open3D's pre-computed face normals (already consistently oriented)
+        face_normals = np.asarray(mesh.triangle_normals)
         
-        # Face normals using cross product (v1-v0) x (v2-v0)
-        edge1 = v1 - v0
-        edge2 = v2 - v0
-        face_normals = np.cross(edge1, edge2)
-        
-        # Normalize face normals
-        norms = np.linalg.norm(face_normals, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0  # Avoid division by zero
-        face_normals = face_normals / norms
-        
-        # Use face normals directly (already consistently oriented)
-        aligned_normals = face_normals
-        
-        return face_centers, aligned_normals
+        return face_centers, face_normals
     
     def get_triangle_centers_and_normals(self, 
-                                       mesh: o3d.geometry.TriangleMesh,
-                                       phi: np.ndarray) -> np.ndarray:
+                                       mesh: o3d.geometry.TriangleMesh) -> np.ndarray:
         """
         Get all triangle centers and their consistently oriented normals.
         
         Args:
             mesh: Open3D triangle mesh
-            phi: Signed distance field (used for mesh processing)
             
         Returns:
             N*6 array where each row is [x, y, z, nx, ny, nz]
         """
-        face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh, phi)
+        face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh)
         
         # Combine centers and normals into N*6 array
         result = np.column_stack([face_centers, aligned_normals])
@@ -318,9 +296,8 @@ class MeshGeodesicSampler:
     
     
     
-    def sample_mesh_faces_with_sdf_normals(self, 
-                                         mesh: o3d.geometry.TriangleMesh,
-                                         phi: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def sample_mesh_faces_with_consistent_normals(self, 
+                                                 mesh: o3d.geometry.TriangleMesh) -> Tuple[np.ndarray, np.ndarray]:
         """
         Sample mesh faces and compute consistently oriented normals.
         
@@ -329,14 +306,13 @@ class MeshGeodesicSampler:
         
         Args:
             mesh: Open3D triangle mesh
-            phi: Signed distance field (used for mesh processing)
             
         Returns:
             Tuple of (centers, normals) where:
             - centers: Face center coordinates (K, 3)
             - normals: Consistently oriented face normals (K, 3)
         """
-        face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh, phi)
+        face_centers, aligned_normals = self._compute_face_centers_and_normals(mesh)
         
         # Get sampling distance based on expected_particle_size
         min_distance = self._get_sampling_distance()
@@ -354,7 +330,14 @@ class MeshGeodesicSampler:
                                              face_normals: np.ndarray,
                                              min_distance: float) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Sample faces with minimum distance constraint using spatial hashing.
+        Initial face sampling with distance constraint using spatial hashing.
+        
+        This method performs the FIRST stage of distance-based sampling using
+        spatial hashing for fast neighbor queries. It's designed for initial
+        filtering of mesh faces during the sampling process.
+        
+        Note: This is followed by apply_non_maximum_suppression() for final
+        refinement using more precise KDTree-based distance queries.
         
         Args:
             face_centers: Face center coordinates (N, 3)
@@ -415,7 +398,14 @@ class MeshGeodesicSampler:
                                     normals: np.ndarray,
                                     min_distance: float) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Apply non-maximum suppression to remove overlapping samples.
+        Final refinement using non-maximum suppression with precise distance queries.
+        
+        This method performs the SECOND stage of distance-based sampling using
+        KDTree for precise neighbor queries. It's designed for final refinement
+        of already sampled points to ensure optimal spacing.
+        
+        Note: This follows _sample_faces_with_distance_constraint() which uses
+        spatial hashing for initial fast filtering.
         
         Args:
             centers: Sample centers (K, 3)
@@ -482,7 +472,7 @@ class MeshGeodesicSampler:
         """
         Main method to sample points on membrane surface using mesh face sampling.
         
-        This method uses mesh face sampling with SDF-aligned normals.
+        This method uses mesh face sampling with consistently oriented normals.
         
         Args:
             mask: Binary membrane mask (0/1)
@@ -492,18 +482,18 @@ class MeshGeodesicSampler:
         Returns:
             Tuple of (centers, normals) where:
             - centers: Sampled point coordinates (K, 3)
-            - normals: Corresponding surface normals aligned with SDF gradient (K, 3)
+            - normals: Corresponding surface normals consistently oriented (K, 3)
         """
         if volume_shape is None:
             volume_shape = mask.shape[::-1]  # Convert from (z,y,x) to (x,y,z)
         
-        print("Using mesh face sampling with SDF-aligned normals...")
+        print("Using mesh face sampling with consistently oriented normals...")
         
         # Process mask to mesh
         mesh, phi = self._process_mask_to_mesh(mask)
         
-        # Sample mesh faces with SDF-aligned normals
-        centers, normals = self.sample_mesh_faces_with_sdf_normals(mesh, phi)
+        # Sample mesh faces with consistently oriented normals
+        centers, normals = self.sample_mesh_faces_with_consistent_normals(mesh)
         
         # Apply non-maximum suppression
         min_distance = self._get_sampling_distance()
@@ -524,7 +514,7 @@ class MeshGeodesicSampler:
         """
         Get all triangle centers and normals from mesh without sampling.
         
-        This method extracts all triangle centers and their SDF-aligned normals,
+        This method extracts all triangle centers and their consistently oriented normals,
         providing the raw mesh data for particle placement.
         
         Note: This method does not use min_distance as it extracts ALL triangles
@@ -543,7 +533,7 @@ class MeshGeodesicSampler:
         mesh, phi = self._process_mask_to_mesh(mask, spacing)
         
         # Get all triangle centers and normals (no sampling applied)
-        triangle_data = self.get_triangle_centers_and_normals(mesh, phi)
+        triangle_data = self.get_triangle_centers_and_normals(mesh)
         
         print(f"Extracted {len(triangle_data)} triangle centers")
         return triangle_data
@@ -705,7 +695,6 @@ class MeshGeodesicSampler:
 
 
 def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
-                                taubin_iterations: int = 10,
                                 expected_particle_size: Optional[float] = None,
                                 random_seed: Optional[int] = None,
                                 add_noise: bool = False,
@@ -715,7 +704,6 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
     
     Args:
         smoothing_sigma: Gaussian smoothing parameter (in voxels)
-        taubin_iterations: Number of Taubin smoothing iterations
         expected_particle_size: Expected particle size in pixels for mesh density control
         random_seed: Random seed for mesh generation (None for deterministic)
         add_noise: If True, add small Gaussian noise to the smoothed mask to introduce variation
@@ -726,7 +714,6 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
     """
     return MeshGeodesicSampler(
         smoothing_sigma=smoothing_sigma,
-        taubin_iterations=taubin_iterations,
         expected_particle_size=expected_particle_size,
         random_seed=random_seed,
         add_noise=add_noise,
@@ -773,7 +760,6 @@ def run_mesh_geodesic_sampling(
     mask: np.ndarray,
     *, # '*' is used to indicate that the following parameters are keyword-only
     smoothing_sigma: float = 1.5,
-    taubin_iterations: int = 10,
     particle_radius: float = 10.0,
     volume_shape: Optional[Tuple[int, int, int]] = None,
     expected_particle_size: Optional[float] = None,
@@ -782,12 +768,11 @@ def run_mesh_geodesic_sampling(
     """
     One-shot convenience wrapper to run mesh-geodesic sampling on a mask.
     
-    Uses mesh face sampling with SDF-aligned normals for all datasets.
+    Uses mesh face sampling with consistently oriented normals for all datasets.
     
     Args:
         mask: Binary membrane mask (0/1)
         smoothing_sigma: Gaussian smoothing parameter (in voxels)
-        taubin_iterations: Number of Taubin smoothing iterations
         particle_radius: Effective particle radius for boundary checking
         volume_shape: Volume dimensions for boundary checking
         expected_particle_size: Expected particle size in pixels for mesh density control
@@ -796,11 +781,10 @@ def run_mesh_geodesic_sampling(
     Returns:
         Tuple of (centers, normals) where:
         - centers: Sampled point coordinates (K, 3)
-        - normals: Corresponding surface normals aligned with SDF gradient (K, 3)
+        - normals: Corresponding surface normals consistently oriented (K, 3)
     """
     sampler = create_mesh_geodesic_sampler(
         smoothing_sigma=smoothing_sigma,
-        taubin_iterations=taubin_iterations,
         expected_particle_size=expected_particle_size,
         random_seed=random_seed
     )
@@ -817,7 +801,6 @@ def get_triangle_centers_and_normals(
     *,
     expected_particle_size: Optional[float] = None,
     smoothing_sigma: float = 1.5,
-    taubin_iterations: int = 10,
     spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     random_seed: Optional[int] = None
 ) -> np.ndarray:
@@ -832,7 +815,6 @@ def get_triangle_centers_and_normals(
         mask: Binary membrane mask (0/1)
         expected_particle_size: Expected particle size in pixels for mesh density control
         smoothing_sigma: Gaussian smoothing parameter (in voxels)
-        taubin_iterations: Number of Taubin smoothing iterations (used if expected_particle_size is None)
         spacing: Voxel spacing (x, y, z)
         random_seed: Random seed for mesh generation (None for deterministic)
     
@@ -841,7 +823,6 @@ def get_triangle_centers_and_normals(
     """
     sampler = create_mesh_geodesic_sampler(
         smoothing_sigma=smoothing_sigma,
-        taubin_iterations=taubin_iterations,
         expected_particle_size=expected_particle_size,
         random_seed=random_seed
     )
