@@ -81,7 +81,7 @@ class MeshGeodesicSampler:
             target_resolution: Target resolution for mesh generation (pixels per voxel)
             
         Returns:
-            Signed distance field where phi=0 is at membrane center, phi>0 is distance to membrane center
+            Signed distance field where phi=0 is at membrane center layer, phi>0 is distance to center
         """
         # Set random seed if provided
         if self.random_seed is not None:
@@ -94,22 +94,11 @@ class MeshGeodesicSampler:
             scale_factor = 1.0 / target_resolution
             mask = zoom(mask, scale_factor, order=1)  # Linear interpolation
         
-        # Apply Gaussian smoothing to reduce noise
-        mask_smooth = gaussian_filter(mask.astype(float), sigma=self.smoothing_sigma)
+        # Create signed distance field: phi=0 at membrane center layer
+        # 创建符号距离场，phi=0在膜中心层
         
-        # Optionally add small random noise to introduce mesh variation
-        # Disabled by default to keep SDF smooth and stable for simple shapes
-        if self.add_noise:
-            noise_std = float(self.noise_scale_factor) * max(1.0, float(self.smoothing_sigma))
-            random_noise = np.random.normal(0.0, noise_std, mask_smooth.shape)
-            mask_smooth = mask_smooth + random_noise
-        
-        # Create signed distance field: distance to membrane center
-        # 计算到膜中心的距离，膜中心定义为phi=0
-        # 所有值都为正值，表示到膜中心的距离
-        
-        # 找到膜区域
-        membrane_mask = (mask_smooth > 0.5).astype(float)
+        # 直接使用原始mask，不进行高斯平滑
+        membrane_mask = mask.astype(float)
         
         # 计算到膜区域边界的距离
         distance_to_boundary = edt(1 - membrane_mask)
@@ -117,12 +106,24 @@ class MeshGeodesicSampler:
         # 计算膜区域内部的厚度
         distance_inside_membrane = edt(membrane_mask)
         
-        # 新的SDF：膜中心为0，其他位置为到膜中心的距离
-        # 膜内部：使用到膜边界的距离作为到中心的距离
-        # 膜外部：使用到膜边界的距离
-        phi = np.where(membrane_mask > 0,
-                      distance_inside_membrane,  # 膜内部：到膜中心的距离
-                      distance_to_boundary)      # 膜外部：到膜边界的距离
+        # 找到膜中心层：膜内部距离边界最大的位置
+        if np.any(membrane_mask > 0):
+            max_internal_distance = np.max(distance_inside_membrane[membrane_mask > 0])
+            
+            # 创建膜中心面：使用更宽松的阈值来创建连续的面
+            # 膜中心面定义为膜内部距离边界接近最大的位置
+            center_threshold = max_internal_distance * 0.9  # 使用90%的最大距离作为阈值
+            membrane_center_mask = (membrane_mask > 0) & (distance_inside_membrane >= center_threshold)
+            
+            # 创建符号距离场：膜中心面为0，膜内部和外部为正值
+            phi = np.where(membrane_center_mask,
+                          0,  # 膜中心面：0
+                          np.where(membrane_mask > 0,
+                                  distance_inside_membrane,  # 膜内部：正距离（到膜中心）
+                                  distance_to_boundary + max_internal_distance))  # 膜外部：正距离（到膜中心）
+        else:
+            # 如果没有膜区域，返回全零
+            phi = np.zeros_like(membrane_mask)
         
         return phi
     
@@ -892,7 +893,7 @@ def save_sampling_outputs(
     )
     df_coords.to_csv(coord_csv, index=False)
 
-    # 2) Simplified RELION STAR format (like voxel_sample.py)
+    # 2) Simplified RELION STAR format
     star_file = out_dir / "particles.star"
     if use_simplified_relion:
         _save_simplified_relion_star(
@@ -952,7 +953,7 @@ def _save_simplified_relion_star(
     voxel_size: Optional[Tuple[float, float, float]] = None,
 ) -> None:
     """
-    Save simplified RELION STAR file with minimal columns (like voxel_sample.py).
+    Save simplified RELION STAR file with minimal columns.
     
     Only includes essential columns for particle picking:
     - rlnCoordinateX/Y/Z: particle coordinates
