@@ -112,7 +112,8 @@ class MeshGeodesicSampler:
             
             # 创建膜中心面：使用更宽松的阈值来创建连续的面
             # 膜中心面定义为膜内部距离边界接近最大的位置
-            center_threshold = max_internal_distance * 0.9  # 使用90%的最大距离作为阈值
+            # 对于球形膜，使用更宽松的阈值来创建连续的中心面
+            center_threshold = max_internal_distance * 0.5  # 使用50%的最大距离作为阈值
             membrane_center_mask = (membrane_mask > 0) & (distance_inside_membrane >= center_threshold)
             
             # 创建符号距离场：膜中心面为0，膜内部和外部为正值

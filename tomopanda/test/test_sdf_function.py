@@ -73,6 +73,12 @@ def test_sdf_function():
     print(f"SDF max: {np.max(phi):.3f}")
     print(f"SDF mean: {np.mean(phi):.3f}")
     print(f"Zero points: {np.sum(np.abs(phi) < 1e-6)}")
+    print(f"Phi=0 voxels: {np.sum(np.abs(phi) < 1e-6)}")
+    
+    # Debug information
+    print(f"Membrane voxels: {np.sum(membrane_mask > 0)}")
+    print(f"Max internal distance: {np.max(phi[membrane_mask > 0]) if np.any(membrane_mask > 0) else 0:.3f}")
+    print(f"Center threshold: {np.max(phi[membrane_mask > 0]) * 0.5 if np.any(membrane_mask > 0) else 0:.3f}")
     
     # Visualize results
     visualize_results(membrane_mask, phi)
