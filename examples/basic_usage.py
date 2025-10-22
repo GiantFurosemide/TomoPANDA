@@ -47,16 +47,8 @@ def main():
     run_command(["python", "-m", "tomopanda.cli.main", "detect", "--help"])
     print()
 
-    # 6. 运行sample voxel-sample（合成数据）
-    print("6. 运行sample voxel-sample（合成数据）:")
-    run_command([
-        "python", "-m", "tomopanda.cli.main", "sample", "voxel-sample",
-        "--create-synthetic", "--output", "examples_voxel_results"
-    ])
-    print()
-
-    # 7. 运行sample mesh-geodesic（合成数据）
-    print("7. 运行sample mesh-geodesic（合成数据）:")
+    # 6. 运行sample mesh-geodesic（合成数据）
+    print("6. 运行sample mesh-geodesic（合成数据）:")
     run_command([
         "python", "-m", "tomopanda.cli.main", "sample", "mesh-geodesic",
         "--create-synthetic", "--output", "examples_mesh_results"
