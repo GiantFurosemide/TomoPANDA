@@ -40,7 +40,8 @@ class MeshGeodesicSampler:
                  expected_particle_size: Optional[float] = None,
                  random_seed: Optional[int] = None,
                  add_noise: bool = False,
-                 noise_scale_factor: float = 0.1):
+                 noise_scale_factor: float = 0.1,
+                 fast_mode: bool = False):
         """
         Initialize the mesh geodesic sampler.
         
@@ -50,12 +51,14 @@ class MeshGeodesicSampler:
             random_seed: Random seed for mesh generation (None for deterministic)
             add_noise: If True, add small Gaussian noise to the smoothed mask to introduce variation
             noise_scale_factor: Scales the standard deviation of added noise (multiplied by smoothing_sigma)
+            fast_mode: If True, use optimized algorithms for faster processing
         """
         self.smoothing_sigma = smoothing_sigma
         self.expected_particle_size = expected_particle_size
         self.random_seed = random_seed
         self.add_noise = add_noise
         self.noise_scale_factor = noise_scale_factor
+        self.fast_mode = fast_mode
     
     def _get_sampling_distance(self) -> float:
         """
@@ -224,7 +227,11 @@ class MeshGeodesicSampler:
 
         # Orient mesh normals for consistency using connectivity-based approach
         try:
-            mesh = self._orient_mesh_normals_consistent(mesh)
+            if self.fast_mode:
+                # Skip normal orientation for faster processing
+                print("快速模式：跳过法向量定向")
+            else:
+                mesh = self._orient_mesh_normals_consistent(mesh)
         except Exception:
             # Fallback silently if orientation fails; normals remain as computed
             pass
@@ -595,6 +602,11 @@ class MeshGeodesicSampler:
         vertices = np.asarray(mesh.vertices)
         n_faces = len(faces)
         
+        # Performance monitoring
+        import time
+        start_time = time.time()
+        print(f"开始法向量定向，面数: {n_faces}")
+        
         # Compute face normals
         v0 = vertices[faces[:, 0]]
         v1 = vertices[faces[:, 1]] 
@@ -608,15 +620,25 @@ class MeshGeodesicSampler:
         norms[norms == 0] = 1.0
         face_normals = face_normals / norms
         
-        # Build face adjacency graph
+        # Build face adjacency graph using edge hash table - O(F) complexity
         face_adjacency = [[] for _ in range(n_faces)]
         
-        # Find faces that share edges
-        for i in range(n_faces):
-            for j in range(i+1, n_faces):
-                if self._faces_share_edge(faces[i], faces[j]):
-                    face_adjacency[i].append(j)
-                    face_adjacency[j].append(i)
+        # Use edge hash table for O(F) adjacency building
+        from collections import defaultdict
+        edge_to_faces = defaultdict(list)
+        
+        # Build edge -> faces mapping
+        for face_idx, face in enumerate(faces):
+            for i in range(3):
+                edge = tuple(sorted([face[i], face[(i+1) % 3]]))
+                edge_to_faces[edge].append(face_idx)
+        
+        # Build adjacency from shared edges
+        for edge, face_list in edge_to_faces.items():
+            if len(face_list) == 2:  # Only two faces share this edge
+                face1, face2 = face_list
+                face_adjacency[face1].append(face2)
+                face_adjacency[face2].append(face1)
         
         # Use BFS to ensure consistency
         visited = [False] * n_faces
@@ -644,6 +666,10 @@ class MeshGeodesicSampler:
         mesh.triangles = o3d.utility.Vector3iVector(faces)
         mesh.compute_triangle_normals()
         mesh.compute_vertex_normals()
+        
+        # Performance monitoring
+        total_time = time.time() - start_time
+        print(f"法向量定向完成，耗时: {total_time:.2f}秒")
         
         return mesh
     
@@ -700,7 +726,8 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
                                 expected_particle_size: Optional[float] = None,
                                 random_seed: Optional[int] = None,
                                 add_noise: bool = False,
-                                noise_scale_factor: float = 0.1) -> MeshGeodesicSampler:
+                                noise_scale_factor: float = 0.1,
+                                fast_mode: bool = False) -> MeshGeodesicSampler:
     """
     Factory function to create a MeshGeodesicSampler instance.
     
@@ -710,6 +737,7 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
         random_seed: Random seed for mesh generation (None for deterministic)
         add_noise: If True, add small Gaussian noise to the smoothed mask to introduce variation
         noise_scale_factor: Scales the standard deviation of added noise (multiplied by smoothing_sigma)
+        fast_mode: If True, use optimized algorithms for faster processing
         
     Returns:
         Configured MeshGeodesicSampler instance
@@ -719,7 +747,8 @@ def create_mesh_geodesic_sampler(smoothing_sigma: float = 1.5,
         expected_particle_size=expected_particle_size,
         random_seed=random_seed,
         add_noise=add_noise,
-        noise_scale_factor=noise_scale_factor
+        noise_scale_factor=noise_scale_factor,
+        fast_mode=fast_mode
     )
 
 
