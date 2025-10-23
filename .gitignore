@@ -18,3 +18,5 @@ __pycache__
 *.cfg
 
 .ipynb_checkpoints
+
+output/

@@ -120,6 +120,7 @@ class MRCWriter:
                   filepath: Union[str, Path],
                   voxel_size: Optional[Tuple[float, float, float]] = None,
                   origin: Optional[Tuple[float, float, float]] = None,
+                  metadata: Optional[dict] = None,
                   overwrite: bool = True) -> None:
         """
         Write numpy array to MRC file.
@@ -129,6 +130,7 @@ class MRCWriter:
             filepath: Output file path
             voxel_size: Voxel size (x, y, z) in Angstroms
             origin: Origin coordinates (x, y, z)
+            metadata: Dictionary containing MRC header metadata
             overwrite: Whether to overwrite existing file
         """
         filepath = Path(filepath)
@@ -144,11 +146,64 @@ class MRCWriter:
             with mrcfile.new(str(filepath), overwrite=overwrite) as mrc:
                 mrc.set_data(data.astype(np.float32))
                 
-                # Set voxel size if provided
+                # If metadata is provided, use it to set header information
+                if metadata is not None:
+                    # Set voxel size from metadata
+                    if 'voxel_size' in metadata and metadata['voxel_size'] is not None:
+                        voxel_size_from_meta = metadata['voxel_size']
+                        if hasattr(voxel_size_from_meta, 'x'):  # numpy record array
+                            mrc.voxel_size = (voxel_size_from_meta['x'], 
+                                            voxel_size_from_meta['y'], 
+                                            voxel_size_from_meta['z'])
+                        else:  # tuple or list
+                            mrc.voxel_size = tuple(voxel_size_from_meta)
+                    
+                    # Set origin from metadata
+                    if 'origin' in metadata and metadata['origin'] is not None:
+                        origin_from_meta = metadata['origin']
+                        if hasattr(origin_from_meta, 'x'):  # numpy record array
+                            mrc.header.origin = (origin_from_meta['x'], 
+                                               origin_from_meta['y'], 
+                                               origin_from_meta['z'])
+                        else:  # tuple or list
+                            mrc.header.origin = tuple(origin_from_meta)
+                    
+                    # Set cell dimensions from metadata
+                    if 'cell_dimensions' in metadata and metadata['cell_dimensions'] is not None:
+                        cell_dims = metadata['cell_dimensions']
+                        if hasattr(cell_dims, 'alpha'):  # numpy record array
+                            mrc.header.cellb.alpha = cell_dims['alpha']
+                            mrc.header.cellb.beta = cell_dims['beta']
+                            mrc.header.cellb.gamma = cell_dims['gamma']
+                        else:  # tuple or list
+                            mrc.header.cellb.alpha = cell_dims[0]
+                            mrc.header.cellb.beta = cell_dims[1]
+                            mrc.header.cellb.gamma = cell_dims[2]
+                    
+                    # Set cell angles from metadata
+                    if 'cell_angles' in metadata and metadata['cell_angles'] is not None:
+                        cell_angles = metadata['cell_angles']
+                        if hasattr(cell_angles, 'x'):  # numpy record array
+                            mrc.header.cella.x = cell_angles['x']
+                            mrc.header.cella.y = cell_angles['y']
+                            mrc.header.cella.z = cell_angles['z']
+                        else:  # tuple or list
+                            mrc.header.cella.x = cell_angles[0]
+                            mrc.header.cella.y = cell_angles[1]
+                            mrc.header.cella.z = cell_angles[2]
+                    
+                    # Set space group from metadata
+                    if 'spacegroup' in metadata and metadata['spacegroup'] is not None:
+                        mrc.header.ispg = metadata['spacegroup']
+                    
+                    # Set mode from metadata
+                    if 'mode' in metadata and metadata['mode'] is not None:
+                        mrc.header.mode = metadata['mode']
+                
+                # Override with explicit parameters if provided
                 if voxel_size is not None:
                     mrc.voxel_size = voxel_size
                 
-                # Set origin if provided
                 if origin is not None:
                     mrc.header.origin = origin
                     
