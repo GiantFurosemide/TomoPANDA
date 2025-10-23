@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from tomopanda.core.mesh_geodesic import MeshGeodesicSampler
 
-def create_membrane_mask(size=256, membrane_diameter=128, membrane_thickness=3):
+def create_membrane_mask(size=256, membrane_diameter=128, membrane_thickness=5):
     """
     Create a 3D membrane mask for testing
     
