@@ -21,7 +21,7 @@ matplotlib>=3.5.0
 plotly>=5.10.0
 seaborn>=0.11.0
 vtk>=9.2.0
-mayavi>=4.8.0
+# mayavi>=4.8.3
 
 # Experiment tracking and management
 wandb>=0.15.0
