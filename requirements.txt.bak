@@ -1,0 +1,53 @@
+# 核心依赖
+torch>=1.9.0
+torchvision>=0.10.0
+numpy>=1.21.0,<2.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+
+# 科学计算
+matplotlib>=3.4.0
+seaborn>=0.11.0
+plotly>=5.0.0
+
+# 图像处理
+opencv-python>=4.5.0
+Pillow>=8.3.0
+scikit-image>=0.18.0
+
+# 几何深度学习
+torch-geometric>=2.0.0
+e3nn>=0.4.0
+
+# 分子动力学分析
+MDAnalysis>=2.0.0
+
+# 数据处理
+pandas>=1.3.0
+h5py>=3.1.0
+zarr>=2.10.0
+
+# 可视化
+#mayavi>=4.8.1
+#vtk>=9.2
+
+# 配置管理
+pyyaml>=5.4.0
+toml>=0.10.0
+
+# 进度条
+tqdm>=4.62.0
+
+# 日志
+loguru>=0.5.0
+
+# Mesh geodesic sampling dependencies
+mrcfile>=1.4.0
+open3d>=0.16.0
+scikit-image>=0.18.0
+# gdist is now optional (SciPy graph-based fallback provided)
+# gdist>=0.0.0
+pandas>=1.3.0
+
+# notbook
+jupyterlab>=4.4.7
