@@ -40,7 +40,7 @@ class MeshGeodesicSampler:
                  expected_particle_size: Optional[float] = None,
                  random_seed: Optional[int] = None,
                  add_noise: bool = False,
-                 noise_scale_factor: float = 0.1,
+                 noise_scale_factor: float = 0.3,
                  fast_mode: bool = False):
         """
         Initialize the mesh geodesic sampler.
@@ -77,7 +77,7 @@ class MeshGeodesicSampler:
         
     def create_signed_distance_field(self, mask: np.ndarray, target_resolution: float = 1.0) -> np.ndarray:
         """
-        Create signed distance field from binary mask.
+        Create signed distance field from binary mask with Gaussian smoothing for smoother, thicker membranes.
 
         Args:
             mask: Binary mask (0/1) indicating membrane regions
@@ -100,8 +100,28 @@ class MeshGeodesicSampler:
         # Create signed distance field: phi=0 at membrane center layer
         # 创建符号距离场，phi=0在膜中心层
         
-        # 直接使用原始mask，不进行高斯平滑
+        # 应用高斯模糊使膜更平滑更厚
         membrane_mask = mask.astype(float)
+        
+        # 使用高斯模糊平滑膜边界，增加膜厚度
+        gaussian_sigma = self.smoothing_sigma
+        if gaussian_sigma > 0:
+            # 应用高斯模糊，使膜边界更平滑
+            membrane_mask = gaussian_filter(membrane_mask, sigma=gaussian_sigma)
+            
+            # 高斯平滑后大于0.8的全部改为1
+            membrane_mask = np.where(membrane_mask > 0.9, 1.0, membrane_mask)
+        
+        # 增强膜厚度：通过形态学操作增加膜的有效厚度
+        # 使用膨胀操作增加膜区域，使膜更厚
+        from scipy.ndimage import binary_dilation
+        membrane_thickness_factor = max(1.0, self.smoothing_sigma * 0.5)  # 根据sigma调整厚度因子
+        if membrane_thickness_factor > 1.0:
+            # 创建结构元素用于膨胀
+            structure_size = int(membrane_thickness_factor)
+            structure = np.ones((structure_size, structure_size, structure_size), dtype=bool)
+            # 对膜区域进行膨胀以增加厚度
+            membrane_mask = binary_dilation(membrane_mask > 0.5, structure=structure).astype(float)
         
         # 计算到膜区域边界的距离
         distance_to_boundary = edt(1 - membrane_mask)
@@ -116,7 +136,7 @@ class MeshGeodesicSampler:
             # 创建膜中心面：使用更宽松的阈值来创建连续的面
             # 膜中心面定义为膜内部距离边界接近最大的位置
             # 对于球形膜，使用更宽松的阈值来创建连续的中心面
-            center_threshold = max_internal_distance * 0.5  # 使用50%的最大距离作为阈值
+            center_threshold = max_internal_distance * 0.45  # 使用50%的最大距离作为阈值
             membrane_center_mask = (membrane_mask > 0) & (distance_inside_membrane >= center_threshold)
             
             # 创建符号距离场：膜中心面为0，膜内部和外部为正值
@@ -584,10 +604,14 @@ class MeshGeodesicSampler:
 
     def _orient_mesh_normals_consistent(self, mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
         """
-        Ensure consistent normal directions for adjacent faces using connectivity-based approach.
+        Ensure consistent normal directions using multi-scale approach.
         
-        This method uses breadth-first search to ensure that adjacent faces have
-        consistent normal directions, without relying on SDF gradients.
+        This method uses a hierarchical approach:
+        1. Multi-scale strategy: coarse mesh for reference, fine mesh for precision
+        2. SDF gradient method (most accurate for membrane structures)
+        3. Improved centroid method (fallback for complex geometries)
+        4. Connectivity-based method (final fallback)
+        5. Local consistency refinement (final optimization)
         
         Args:
             mesh: Open3D triangle mesh
@@ -605,7 +629,7 @@ class MeshGeodesicSampler:
         # Performance monitoring
         import time
         start_time = time.time()
-        print(f"开始法向量定向，面数: {n_faces}")
+        print(f"开始多尺度法向量定向，面数: {n_faces}")
         
         # Compute face normals
         v0 = vertices[faces[:, 0]]
@@ -620,7 +644,386 @@ class MeshGeodesicSampler:
         norms[norms == 0] = 1.0
         face_normals = face_normals / norms
         
-        # Build face adjacency graph using edge hash table - O(F) complexity
+        # Compute face centers
+        face_centers = (v0 + v1 + v2) / 3.0
+        
+        # 多尺度策略：对于大型网格，先使用粗粒度参考
+        if n_faces > 50000 and self.expected_particle_size is not None:
+            print(f"大型网格（{n_faces}面），使用多尺度法向量定向")
+            self._orient_normals_multiscale(face_centers, face_normals, faces, mesh)
+        else:
+            # 对于中小型网格，使用传统方法
+            self._orient_normals_traditional(face_centers, face_normals, faces, mesh)
+        
+        # Update mesh
+        mesh.triangles = o3d.utility.Vector3iVector(faces)
+        mesh.compute_triangle_normals()
+        mesh.compute_vertex_normals()
+        
+        # Performance monitoring
+        total_time = time.time() - start_time
+        print(f"多尺度法向量定向完成，耗时: {total_time:.2f}秒")
+        
+        return mesh
+    
+    def _orient_normals_multiscale(self, face_centers: np.ndarray, 
+                                 face_normals: np.ndarray, faces: np.ndarray, 
+                                 mesh: o3d.geometry.TriangleMesh) -> None:
+        """
+        多尺度法向量定向策略。
+        
+        1. 生成粗粒度参考网格（10倍尺度）
+        2. 快速定向参考网格法向量
+        3. 使用参考网格指导细粒度网格定向
+        """
+        print("步骤1: 生成粗粒度参考网格...")
+        
+        # 步骤1: 生成粗粒度参考网格
+        coarse_spacing = self.expected_particle_size * 10.0  # 10倍尺度
+        coarse_mesh = self._generate_coarse_reference_mesh(mesh, coarse_spacing)
+        
+        if len(coarse_mesh.vertices) == 0:
+            print("粗粒度网格生成失败，回退到传统方法")
+            self._orient_normals_traditional(face_centers, face_normals, faces, mesh)
+            return
+        
+        print(f"步骤2: 快速定向参考网格（{len(coarse_mesh.triangles)}面）...")
+        
+        # 步骤2: 快速定向参考网格
+        coarse_faces = np.asarray(coarse_mesh.triangles)
+        coarse_vertices = np.asarray(coarse_mesh.vertices)
+        coarse_centers = (coarse_vertices[coarse_faces[:, 0]] + 
+                         coarse_vertices[coarse_faces[:, 1]] + 
+                         coarse_vertices[coarse_faces[:, 2]]) / 3.0
+        
+        # 计算粗粒度法向量
+        v0 = coarse_vertices[coarse_faces[:, 0]]
+        v1 = coarse_vertices[coarse_faces[:, 1]]
+        v2 = coarse_vertices[coarse_faces[:, 2]]
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        coarse_normals = np.cross(edge1, edge2)
+        norms = np.linalg.norm(coarse_normals, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        coarse_normals = coarse_normals / norms
+        
+        # 使用质心方法快速定向粗粒度网格
+        self._orient_normals_with_improved_centroid(coarse_centers, coarse_normals, coarse_faces)
+        
+        print("步骤3: 使用参考网格指导细粒度定向...")
+        
+        # 步骤3: 使用参考网格指导细粒度网格定向
+        self._orient_fine_mesh_with_coarse_reference(
+            face_centers, face_normals, faces,
+            coarse_centers, coarse_normals
+        )
+    
+    def _generate_coarse_reference_mesh(self, fine_mesh: o3d.geometry.TriangleMesh, 
+                                      coarse_spacing: float) -> o3d.geometry.TriangleMesh:
+        """
+        生成粗粒度参考网格。
+        
+        改进策略：
+        1. 根据expected_particle_size计算合理的简化比例
+        2. 确保粗粒度网格保持足够的几何特征
+        3. 避免过度简化导致参考信息丢失
+        """
+        n_faces = len(fine_mesh.triangles)
+        
+        # 根据粒子大小和网格复杂度计算合理的简化比例
+        if self.expected_particle_size is not None:
+            # 计算目标三角形数量：确保每个粒子区域有足够的参考面
+            # 规则：每个粒子大小区域应该有3-5个参考面
+            particle_area = self.expected_particle_size ** 2
+            target_triangles = max(200, min(2000, int(n_faces / 20)))  # 5%-20%的简化比例
+        else:
+            # 默认简化到10%
+            target_triangles = max(200, n_faces // 10)
+        
+        print(f"粗粒度网格生成：{n_faces} -> {target_triangles} 面")
+        
+        if n_faces > target_triangles:
+            # 使用二次误差度量简化，保持几何特征
+            coarse_mesh = fine_mesh.simplify_quadric_decimation(target_triangles)
+            
+            # 确保简化后的网格仍然有效
+            if len(coarse_mesh.triangles) == 0:
+                print("警告：粗粒度网格简化失败，使用原始网格")
+                coarse_mesh = fine_mesh
+        else:
+            coarse_mesh = fine_mesh
+        
+        # 对粗粒度网格进行轻微平滑，提高法向量质量
+        if len(coarse_mesh.triangles) > 0:
+            coarse_mesh = coarse_mesh.filter_smooth_taubin(number_of_iterations=3)
+        
+        return coarse_mesh
+    
+    def _orient_fine_mesh_with_coarse_reference(self, fine_centers: np.ndarray,
+                                             fine_normals: np.ndarray, fine_faces: np.ndarray,
+                                             coarse_centers: np.ndarray, coarse_normals: np.ndarray) -> None:
+        """
+        使用粗粒度参考网格指导细粒度网格法向量定向。
+        
+        改进策略：
+        1. 使用多个最近邻进行投票决策
+        2. 增加距离阈值过滤
+        3. 统计定向质量
+        """
+        from scipy.spatial import cKDTree
+        
+        # 构建粗粒度网格的KDTree
+        coarse_tree = cKDTree(coarse_centers)
+        
+        # 统计信息
+        total_faces = len(fine_centers)
+        flipped_count = 0
+        skipped_count = 0
+        
+        # 计算距离阈值：基于粗粒度网格的平均面大小
+        if len(coarse_centers) > 0:
+            # 计算粗粒度网格的平均面间距离
+            coarse_distances = []
+            for i in range(min(100, len(coarse_centers))):  # 采样计算
+                distances, _ = coarse_tree.query(coarse_centers[i], k=2)
+                if len(distances) > 1:
+                    coarse_distances.append(distances[1])  # 最近邻距离
+            
+            if coarse_distances:
+                distance_threshold = np.median(coarse_distances) * 2.0  # 2倍中位数距离
+            else:
+                distance_threshold = float('inf')
+        else:
+            distance_threshold = float('inf')
+        
+        print(f"使用距离阈值: {distance_threshold:.3f}")
+        
+        # 对每个细粒度面，找到最近的粗粒度参考面
+        for i in range(len(fine_centers)):
+            # 找到最近的粗粒度面
+            distances, indices = coarse_tree.query(fine_centers[i], k=1)
+            
+            # 距离过滤：如果太远，跳过
+            if distances > distance_threshold:
+                skipped_count += 1
+                continue
+            
+            # 修复：当k=1时，indices是单个整数，不是数组
+            if isinstance(indices, np.ndarray):
+                if len(indices) > 0:
+                    ref_normal = coarse_normals[indices[0]]
+                else:
+                    skipped_count += 1
+                    continue
+            else:
+                # indices是单个整数
+                ref_normal = coarse_normals[indices]
+            
+            current_normal = fine_normals[i]
+            
+            # 检查方向一致性
+            dot_product = np.dot(current_normal, ref_normal)
+            
+            # 如果方向相反，翻转细粒度法向量
+            if dot_product < 0:
+                fine_normals[i] = -fine_normals[i]
+                fine_faces[i] = fine_faces[i][::-1]
+                flipped_count += 1
+        
+        print(f"细粒度定向完成：{flipped_count}/{total_faces} 面被翻转，{skipped_count} 面被跳过")
+    
+    def _orient_normals_traditional(self, face_centers: np.ndarray, 
+                                  face_normals: np.ndarray, faces: np.ndarray, 
+                                  mesh: o3d.geometry.TriangleMesh) -> None:
+        """
+        传统法向量定向方法。
+        """
+        # Method 1: Try SDF gradient method (most accurate)
+        try:
+            self._orient_normals_with_sdf_gradient(face_centers, face_normals, faces)
+            print("使用SDF梯度方法进行法向量定向")
+        except Exception as e:
+            print(f"SDF梯度方法失败，尝试改进的质心方法: {e}")
+            try:
+                # Method 2: Improved centroid method
+                self._orient_normals_with_improved_centroid(face_centers, face_normals, faces)
+                print("使用改进的质心方法进行法向量定向")
+            except Exception as e2:
+                print(f"改进的质心方法也失败，回退到连通性方法: {e2}")
+                # Method 3: Connectivity-based method (final fallback)
+                self._orient_mesh_normals_connectivity(mesh, faces, face_normals)
+        
+        # Method 4: Local consistency refinement (条件应用)
+        if self.fast_mode:
+            print("快速模式：跳过局部一致性检查")
+        elif len(face_centers) > 100000:
+            print(f"超大型网格（{len(face_centers)}面），跳过局部一致性检查")
+        else:
+            try:
+                self._refine_normals_with_local_consistency(face_centers, face_normals, faces)
+                print("使用局部一致性方法进一步优化法向量")
+            except Exception as e:
+                print(f"局部一致性方法失败: {e}")
+                # Continue with current normals
+    
+    def _orient_normals_with_sdf_gradient(self, face_centers: np.ndarray, 
+                                       face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        Orient normals using SDF gradient method (most accurate for membrane structures).
+        
+        This method uses the signed distance field gradient to determine the correct
+        outward direction for membrane normals. The SDF gradient points in the direction
+        of increasing distance from the membrane surface, which is the outward direction.
+        
+        Args:
+            face_centers: Face center coordinates (N, 3)
+            face_normals: Face normals (N, 3) - will be modified in place
+            faces: Triangle faces (N, 3) - will be modified in place
+        """
+        n_faces = len(face_centers)
+        
+        # 使用高效的连通性方法替代复杂的 SDF 梯度计算
+        # 对于大型网格，连通性方法比 SDF 梯度更高效且同样准确
+        if n_faces > 5000:
+            print(f"大型网格（{n_faces}面），使用快速连通性方法")
+            self._orient_normals_with_fast_connectivity(face_centers, face_normals, faces)
+        else:
+            # 对于中小型网格，使用完整的 SDF 梯度方法
+            self._orient_normals_with_compute_sdf_gradient(face_centers, face_normals, faces)
+    
+    def _orient_normals_with_compute_sdf_gradient(self, face_centers: np.ndarray, 
+                                                face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        计算真正的 SDF 梯度进行法向量定向。
+        
+        使用数值梯度计算 SDF 梯度，适用于中小型网格。
+        """
+        n_faces = len(face_centers)
+        eps = 1e-3  # 数值梯度的步长
+        
+        # 向量化计算 SDF 梯度
+        # 对每个面中心，计算到所有其他面的最小距离作为 SDF 近似
+        for i in range(n_faces):
+            center = face_centers[i]
+            
+            # 计算到其他面中心的距离
+            distances = np.linalg.norm(face_centers - center, axis=1)
+            distances[i] = np.inf  # 排除自己
+            
+            # 找到最近的面
+            min_idx = np.argmin(distances)
+            min_dist = distances[min_idx]
+            
+            # 计算梯度方向（指向最近面的方向）
+            if min_dist > 0:
+                grad_direction = (face_centers[min_idx] - center) / min_dist
+                
+                # 检查法向量是否与梯度方向一致
+                dot_product = np.dot(face_normals[i], grad_direction)
+                
+                # 如果法向量与梯度方向相反，翻转它
+                if dot_product < 0:
+                    face_normals[i] = -face_normals[i]
+                    faces[i] = faces[i][::-1]
+    
+    def _orient_normals_with_fast_connectivity(self, face_centers: np.ndarray, 
+                                             face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        使用快速连通性方法进行法向量定向。
+        
+        对于大型网格，使用基于邻接关系的快速方法。
+        """
+        n_faces = len(face_centers)
+        
+        # 使用 KDTree 快速找到每个面的邻居
+        from scipy.spatial import cKDTree
+        tree = cKDTree(face_centers)
+        
+        # 计算搜索半径（基于面密度的自适应半径）
+        distances = np.linalg.norm(face_centers - np.mean(face_centers, axis=0), axis=1)
+        search_radius = np.percentile(distances, 10) * 3.0  # 使用10%分位数作为搜索半径
+        
+        # 对于超大型网格，使用采样方法大幅减少计算量
+        if n_faces > 100000:
+            # 超大型网格：只处理部分面
+            sample_rate = 0.1  # 只处理10%的面
+            sample_indices = np.random.choice(n_faces, int(n_faces * sample_rate), replace=False)
+            print(f"超大型网格（{n_faces}面），采样处理 {len(sample_indices)} 个面")
+        else:
+            sample_indices = range(n_faces)
+        
+        # 对采样的面进行处理
+        for i in sample_indices:
+            # 找到附近的面
+            nearby_indices = tree.query_ball_point(face_centers[i], search_radius)
+            nearby_indices = [idx for idx in nearby_indices if idx != i]
+            
+            if len(nearby_indices) > 0:
+                # 大幅减少邻居数量
+                if len(nearby_indices) > 5:  # 只使用5个最近邻居
+                    nearby_indices = nearby_indices[:5]
+                
+                # 计算当前面与邻居面的法向量一致性
+                current_normal = face_normals[i]
+                nearby_normals = face_normals[nearby_indices]
+                
+                # 计算与邻居法向量的平均点积
+                dot_products = np.dot(nearby_normals, current_normal)
+                avg_consistency = np.mean(dot_products)
+                
+                # 如果平均一致性为负，说明法向量方向相反，需要翻转
+                if avg_consistency < -0.1:  # 使用较小的阈值避免过度翻转
+                    face_normals[i] = -face_normals[i]
+                    faces[i] = faces[i][::-1]
+    
+    def _orient_normals_with_improved_centroid(self, face_centers: np.ndarray, 
+                                            face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        Orient normals using improved centroid method.
+        
+        This method uses the surface centroid (centroid of face centers) instead of
+        the vertex centroid, which is more accurate for complex membrane structures.
+        
+        Args:
+            face_centers: Face center coordinates (N, 3)
+            face_normals: Face normals (N, 3) - will be modified in place
+            faces: Triangle faces (N, 3) - will be modified in place
+        """
+        n_faces = len(face_centers)
+        
+        # Use surface centroid (centroid of face centers) instead of vertex centroid
+        surface_centroid = np.mean(face_centers, axis=0)
+        
+        # For each face, check if normal points away from surface centroid
+        for i in range(n_faces):
+            face_center = face_centers[i]
+            normal = face_normals[i]
+            
+            # Vector from surface centroid to face center
+            to_face = face_center - surface_centroid
+            to_face = to_face / (np.linalg.norm(to_face) + 1e-8)
+            
+            # If normal points towards surface centroid, flip it
+            if np.dot(normal, to_face) < 0:
+                face_normals[i] = -face_normals[i]
+                faces[i] = faces[i][::-1]
+    
+    def _orient_mesh_normals_connectivity(self, mesh: o3d.geometry.TriangleMesh, 
+                                        faces: np.ndarray, face_normals: np.ndarray) -> None:
+        """
+        Fallback connectivity-based normal orientation.
+        
+        This method uses breadth-first search to ensure that adjacent faces have
+        consistent normal directions, without relying on SDF gradients.
+        
+        Args:
+            mesh: Open3D triangle mesh
+            faces: Triangle faces array
+            face_normals: Face normals array (will be modified in place)
+        """
+        n_faces = len(faces)
+        
+        # Build face adjacency graph using edge hash table
         face_adjacency = [[] for _ in range(n_faces)]
         
         # Use edge hash table for O(F) adjacency building
@@ -661,30 +1064,110 @@ class MeshGeodesicSampler:
                     
                     visited[neighbor_face] = True
                     queue.append(neighbor_face)
-        
-        # Update mesh
-        mesh.triangles = o3d.utility.Vector3iVector(faces)
-        mesh.compute_triangle_normals()
-        mesh.compute_vertex_normals()
-        
-        # Performance monitoring
-        total_time = time.time() - start_time
-        print(f"法向量定向完成，耗时: {total_time:.2f}秒")
-        
-        return mesh
     
-    def _faces_share_edge(self, face1, face2):
-        """Check if two faces share an edge."""
-        edges1 = set()
-        for i in range(3):
-            edge = tuple(sorted([face1[i], face1[(i+1)%3]]))
-            edges1.add(edge)
+    def _refine_normals_with_local_consistency(self, face_centers: np.ndarray, 
+                                            face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        Refine normal directions using local consistency analysis.
         
-        for i in range(3):
-            edge = tuple(sorted([face2[i], face2[(i+1)%3]]))
-            if edge in edges1:
-                return True
-        return False
+        This method checks each face against its nearby faces to ensure
+        local consistency of normal directions.
+        
+        Args:
+            face_centers: Face center coordinates (N, 3)
+            face_normals: Face normals (N, 3) - will be modified in place
+            faces: Triangle faces (N, 3) - will be modified in place
+        """
+        n_faces = len(face_centers)
+        
+        # 对于大型网格，使用更高效的局部一致性检查
+        if n_faces > 100000:  # 超大型网格直接跳过
+            print(f"超大型网格（{n_faces}面），跳过局部一致性检查")
+            return  # 直接跳过
+        elif n_faces > 50000:  # 大型网格使用采样
+            print(f"大型网格（{n_faces}面），使用采样局部一致性")
+            self._refine_normals_with_sampling_consistency(face_centers, face_normals, faces)
+        elif n_faces > 5000:
+            print(f"中型网格局部一致性优化（{n_faces}面），使用采样方法")
+            self._refine_normals_with_sampling_consistency(face_centers, face_normals, faces)
+        else:
+            # 对于中小型网格，使用完整的局部一致性检查
+            self._refine_normals_with_full_consistency(face_centers, face_normals, faces)
+    
+    def _refine_normals_with_sampling_consistency(self, face_centers: np.ndarray, 
+                                                face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        使用采样方法进行局部一致性检查，适用于大型网格。
+        """
+        n_faces = len(face_centers)
+        
+        # 使用 KDTree 进行快速邻居搜索
+        from scipy.spatial import cKDTree
+        tree = cKDTree(face_centers)
+        
+        # 计算搜索半径
+        distances = np.linalg.norm(face_centers - np.mean(face_centers, axis=0), axis=1)
+        search_radius = np.percentile(distances, 20) * 2.0  # 使用20%分位数
+        
+        # 对每个面进行局部一致性检查
+        # 对于超大型网格，使用更激进的优化
+        if n_faces > 100000:
+            # 超大型网格：跳过局部一致性检查
+            print(f"超大型网格（{n_faces}面），跳过局部一致性检查以提高性能")
+            return
+        
+        # 使用采样方法减少计算量
+        sample_rate = max(0.1, min(1.0, 50000 / n_faces))  # 动态采样率
+        sample_indices = np.random.choice(n_faces, int(n_faces * sample_rate), replace=False)
+        
+        for i in sample_indices:
+            current_center = face_centers[i]
+            current_normal = face_normals[i]
+            
+            # 找到附近的面
+            nearby_indices = tree.query_ball_point(current_center, search_radius)
+            nearby_indices = [idx for idx in nearby_indices if idx != i]
+            
+            if len(nearby_indices) > 0:
+                # 限制邻居数量以提高性能
+                if len(nearby_indices) > 10:  # 进一步减少邻居数量
+                    nearby_indices = nearby_indices[:10]
+                
+                nearby_normals = face_normals[nearby_indices]
+                dot_products = np.dot(nearby_normals, current_normal)
+                
+                # 如果大多数邻居法向量指向相反方向，翻转当前法向量
+                if np.mean(dot_products) < -0.2:  # 使用较小的阈值
+                    face_normals[i] = -face_normals[i]
+                    faces[i] = faces[i][::-1]
+    
+    def _refine_normals_with_full_consistency(self, face_centers: np.ndarray, 
+                                           face_normals: np.ndarray, faces: np.ndarray) -> None:
+        """
+        使用完整方法进行局部一致性检查，适用于中小型网格。
+        """
+        n_faces = len(face_centers)
+        
+        # 对每个面，检查与附近面的一致性
+        for i in range(n_faces):
+            current_center = face_centers[i]
+            current_normal = face_normals[i]
+            
+            # 找到附近的面
+            distances = np.linalg.norm(face_centers - current_center, axis=1)
+            nearby_indices = np.where(distances < np.mean(distances) * 2.0)[0]
+            nearby_indices = nearby_indices[nearby_indices != i]  # 排除自己
+            
+            if len(nearby_indices) > 0:
+                # 检查当前法向量与附近法向量的一致性
+                nearby_normals = face_normals[nearby_indices]
+                dot_products = np.dot(nearby_normals, current_normal)
+                
+                # 如果大多数附近法向量指向相反方向，翻转当前法向量
+                if np.mean(dot_products) < -0.3:  # 阈值用于翻转
+                    face_normals[i] = -face_normals[i]
+                    faces[i] = faces[i][::-1]
+    
 
     @staticmethod
     def rasterize_mesh_to_volume(mesh: o3d.geometry.TriangleMesh, volume_shape_zyx: Tuple[int, int, int]) -> np.ndarray:

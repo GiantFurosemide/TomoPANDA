@@ -35,7 +35,12 @@ class RELIONConverter:
             Tuple of (tilt, psi, rot) in degrees
         """
         # Normalize the input vector
-        normal = normal / np.linalg.norm(normal)
+        norm = np.linalg.norm(normal)
+        if norm == 0:
+            # If normal is zero vector, use default direction (0, 0, 1)
+            normal = np.array([0.0, 0.0, 1.0])
+        else:
+            normal = normal / norm
         nx, ny, nz = normal
         
         # Calculate tilt (angle from z-axis)
